@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Track All Tasks</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    #tasks { margin-top: 20px; }
+    li { cursor: pointer; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Track All Tasks</h1>
+  <input id="taskInput" placeholder="Task name" />
+  <button id="toggleBtn">Start</button>
+  <ul id="tasks"></ul>
+  <div id="records" style="display:none;">
+    <h2 id="taskTitle"></h2>
+    <ul id="recordList"></ul>
+  </div>
+  <script src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+[workspace]
+members = ["tat", "gui/src-tauri"]
+resolver = "2"
