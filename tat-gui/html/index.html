@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Track All Tasks</title>
+<script src="tauri.js"></script>
+<style>
+body { font-family: sans-serif; margin: 20px; }
+#task-list li { cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Track All Tasks</h1>
+<input id="task-input" placeholder="Task name">
+<button id="toggle">Start</button>
+<h2>Tasks</h2>
+<ul id="task-list"></ul>
+<div id="records"></div>
+<script>
+let running = false;
+async function refresh() {
+  const tasks = await window.__TAURI__.invoke('list_tasks');
+  const list = document.getElementById('task-list');
+  list.innerHTML = '';
+  tasks.forEach(t => {
+    const li = document.createElement('li');
+    li.textContent = `${t.name} - ${t.seconds}s`;
+    li.onclick = async () => {
+      const rec = await window.__TAURI__.invoke('records', { task: t.name });
+      document.getElementById('records').innerHTML = rec.map(r => `${r.id} ${r.datetime} ${r.action}`).join('<br>');
+    };
+    list.appendChild(li);
+  });
+}
+refresh();
+document.getElementById('toggle').onclick = async () => {
+  const name = document.getElementById('task-input').value;
+  if (!running) {
+    if (!name) return;
+    await window.__TAURI__.invoke('start_task', { task: name });
+    document.getElementById('toggle').innerText = 'Stop';
+    running = true;
+  } else {
+    await window.__TAURI__.invoke('stop_task');
+    document.getElementById('toggle').innerText = 'Start';
+    running = false;
+    refresh();
+  }
+};
+</script>
+</body>
+</html>

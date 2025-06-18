@@ -1,0 +1,25 @@
+{
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "../tat-gui/html",
+    "distDir": "../tat-gui/html"
+  },
+  "package": {
+    "productName": "TrackAllTasks",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "systemTray": {
+      "iconPath": "icons/icon.png"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Track All Tasks",
+        "width": 600,
+        "height": 400
+      }
+    ]
+  }
+}
