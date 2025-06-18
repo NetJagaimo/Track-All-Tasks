@@ -1,6 +1,6 @@
 use chrono::{Local, NaiveDateTime};
 use rusqlite::{params, Connection};
-use std::{sync::{Arc, Mutex}, thread, time::Duration};
+use std::{sync::Mutex, thread, time::Duration};
 use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu};
 
 struct AppState {

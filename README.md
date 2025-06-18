@@ -10,6 +10,8 @@
 ## GUI 編譯方式
 此專案使用 [Tauri](https://tauri.app/) 製作桌面介面，GUI 程式位於 `tat_gui` 目錄。
 
+在編譯 GUI 前，請先依照 Tauri 官方文件安裝系統套件（例如在 Linux 需安裝 `libwebkit2gtk` 等，macOS 則安裝 Xcode Command Line Tools）。
+
 編譯執行檔（以 macOS 為例）：
 ```bash
 # 安裝 Rust 與前置依賴後執行
