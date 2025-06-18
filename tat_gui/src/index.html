@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>TAT</title>
+<script src="https://unpkg.com/@tauri-apps/api@1.5.0/dist/index.umd.js"></script>
+</head>
+<body>
+<h1>Track All Tasks</h1>
+<input id="task" placeholder="task name" />
+<button onclick="toggle()">Start/Stop</button>
+<ul id="tasks"></ul>
+<script>
+let running = false;
+async function toggle() {
+  const name = document.getElementById('task').value;
+  if (!running) {
+    await window.__TAURI__.invoke('start_task', { name });
+    running = true;
+  } else {
+    await window.__TAURI__.invoke('stop_task');
+    running = false;
+  }
+  load();
+}
+async function load() {
+  const list = await window.__TAURI__.invoke('list_tasks');
+  const ul = document.getElementById('tasks');
+  ul.innerHTML = '';
+  for (const [name, secs] of list) {
+    const li = document.createElement('li');
+    li.textContent = `${name}: ${secs}s`;
+    ul.appendChild(li);
+  }
+}
+load();
+</script>
+</body>
+</html>

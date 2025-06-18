@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "tat",
+    "tat_gui"
+]
+resolver = "2"
