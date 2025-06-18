@@ -1,0 +1,6 @@
+# Rust build artifacts
+/tat/target/
+
+# Swift build artifacts
+/TATMacApp/.build/
+/TATMacApp/Package.resolved
