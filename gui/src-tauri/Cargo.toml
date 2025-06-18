@@ -1,0 +1,19 @@
+[package]
+name = "tat-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = "0.29.0"
+chrono = "0.4"
+ctrlc = "3.3.5"
+tauri = { version = "1.5", features = ["api-all"] }
+
+[build-dependencies]
+tauri-build = "1.5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
