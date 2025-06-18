@@ -1,0 +1,9 @@
+[package]
+name = "tat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4"
+rusqlite = "0.29.0"
+ctrlc = "3.3.5"
