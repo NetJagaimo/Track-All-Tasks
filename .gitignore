@@ -8,7 +8,7 @@ Cargo.lock
 /tat/src-tauri/target/
 
 # Build outputs
-/dist/
+
 /build/
 
 # Database files
@@ -85,3 +85,9 @@ temp/
 
 # Auto-generated files
 /tat/src-tauri/tauri.conf.json.bak
+
+# Frontend build output
+/dist/
+
+# Test script
+test_app.sh
