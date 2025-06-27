@@ -10,7 +10,7 @@ struct TaskSummary {
     task_name: String,
     start_time: String,
     end_time: Option<String>,
-    duration_minutes: Option<f64>,
+    duration_seconds: Option<f64>,
 }
 
 // 應用程式狀態
@@ -21,29 +21,78 @@ struct AppState {
 // Tauri 命令
 #[tauri::command]
 fn start_task(task_name: String, state: State<AppState>) -> Result<(), String> {
+    println!("開始任務: {}", task_name);
     let start_time = Local::now().naive_local();
-    log_task(&state.db, &task_name, &start_time, "start")
-        .map_err(|e| format!("Failed to start task: {}", e))
+    println!("開始時間: {}", start_time);
+    
+    let conn = state.db.lock().unwrap();
+    match conn.execute(
+        "INSERT INTO tasks (task_name, start_time, end_time) VALUES (?1, ?2, NULL)",
+        params![task_name, start_time.to_string()],
+    ) {
+        Ok(_) => {
+            println!("任務 '{}' 成功記錄到數據庫", task_name);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("記錄任務失敗: {}", e);
+            Err(format!("Failed to start task: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
 fn end_task(task_name: String, state: State<AppState>) -> Result<(), String> {
+    println!("結束任務: {}", task_name);
     let end_time = Local::now().naive_local();
-    log_task(&state.db, &task_name, &end_time, "end")
-        .map_err(|e| format!("Failed to end task: {}", e))
+    println!("結束時間: {}", end_time);
+    
+    let conn = state.db.lock().unwrap();
+    match conn.execute(
+        "UPDATE tasks SET end_time = ?1 WHERE task_name = ?2 AND end_time IS NULL ORDER BY start_time DESC LIMIT 1",
+        params![end_time.to_string(), task_name],
+    ) {
+        Ok(rows_affected) => {
+            if rows_affected > 0 {
+                println!("任務 '{}' 結束成功記錄到數據庫", task_name);
+                Ok(())
+            } else {
+                eprintln!("沒有找到正在進行的任務 '{}' 來結束", task_name);
+                Err(format!("No ongoing task '{}' found to end", task_name))
+            }
+        }
+        Err(e) => {
+            eprintln!("記錄任務結束失敗: {}", e);
+            Err(format!("Failed to end task: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
-fn get_task_history(state: State<AppState>) -> Result<Vec<TaskSummary>, String> {
-    get_task_summaries(&state.db)
-        .map_err(|e| format!("Failed to get task history: {}", e))
+fn get_task_history(state: State<AppState>) -> Result<HashMap<String, Vec<TaskSummary>>, String> {
+    println!("獲取任務歷史");
+    match get_task_summaries(&state.db) {
+        Ok(history) => {
+            println!("成功獲取 {} 個任務組", history.len());
+            Ok(history)
+        }
+        Err(e) => {
+            eprintln!("獲取任務歷史失敗: {}", e);
+            Err(format!("Failed to get task history: {}", e))
+        }
+    }
 }
 
 fn main() -> Result<()> {
+    println!("正在啟動 Track All Tasks 應用程式...");
+    
     // 初始化數據庫
+    println!("正在初始化數據庫...");
     let db_conn = Arc::new(Mutex::new(init_db()?));
+    println!("數據庫初始化完成");
     
     // 啟動 Tauri 應用程式
+    println!("正在啟動 Tauri 應用程式...");
     tauri::Builder::default()
         .manage(AppState { db: db_conn })
         .invoke_handler(tauri::generate_handler![start_task, end_task, get_task_history])
@@ -54,16 +103,24 @@ fn main() -> Result<()> {
 }
 
 fn init_db() -> Result<Connection> {
+    println!("正在打開數據庫連接...");
     let conn = Connection::open("tasks.db")?;
+    println!("數據庫連接成功，正在創建表格...");
+    
+    // 刪除舊表（如果存在），這會清除所有現有數據
+    conn.execute("DROP TABLE IF EXISTS tasks", [])?;
+    
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY,
-            datetime TEXT NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_name TEXT NOT NULL,
-            action TEXT NOT NULL CHECK(action IN ('start', 'end'))
+            start_time TEXT NOT NULL,
+            end_time TEXT
         )",
         [],
     )?;
+    
+    println!("數據庫表格創建完成");
     Ok(conn)
 }
 
@@ -76,101 +133,51 @@ fn log_task(conn: &Arc<Mutex<Connection>>, task_name: &str, datetime: &NaiveDate
     Ok(())
 }
 
-fn get_task_summaries(conn: &Arc<Mutex<Connection>>) -> Result<Vec<TaskSummary>> {
+fn get_task_summaries(conn: &Arc<Mutex<Connection>>) -> Result<HashMap<String, Vec<TaskSummary>>> {
     let conn = conn.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT datetime, task_name, action FROM tasks ORDER BY datetime DESC",
+        "SELECT task_name, start_time, end_time FROM tasks ORDER BY start_time DESC",
     )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })?;
+    let task_rows = stmt.query_map([], |row| {
+        let task_name: String = row.get(0)?;
+        let start_time_str: String = row.get(1)?;
+        let end_time_str: Option<String> = row.get(2)?;
 
-    let mut task_sessions: Vec<TaskSummary> = Vec::new();
-    let mut start_times: HashMap<String, NaiveDateTime> = HashMap::new();
-
-    for row in rows {
-        let (dt_str, name, action) = row?;
-        let dt = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S%.f")
+        let start_time = NaiveDateTime::parse_from_str(&start_time_str, "%Y-%m-%d %H:%M:%S%.f")
             .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
                 0,
                 rusqlite::types::Type::Text,
                 Box::new(e),
             ))?;
 
-        if action == "start" {
-            start_times.insert(name.clone(), dt);
-        } else if action == "end" {
-            if let Some(start) = start_times.remove(&name) {
-                let duration = dt - start;
-                let duration_minutes = duration.num_minutes() as f64;
-                
-                task_sessions.push(TaskSummary {
-                    task_name: name,
-                    start_time: start.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    end_time: Some(dt.format("%Y-%m-%d %H:%M:%S").to_string()),
-                    duration_minutes: Some(duration_minutes),
-                });
-            }
-        }
-    }
+        let mut duration_seconds: Option<f64> = None;
+        let mut end_time_formatted: Option<String> = None;
 
-    // 處理還在進行中的任務
-    for (name, start_time) in start_times {
-        task_sessions.push(TaskSummary {
-            task_name: name,
+        if let Some(end_str) = end_time_str {
+            let end_time = NaiveDateTime::parse_from_str(&end_str, "%Y-%m-%d %H:%M:%S%.f")
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                ))?;
+            let duration = end_time - start_time;
+            duration_seconds = Some(duration.num_seconds() as f64);
+            end_time_formatted = Some(end_time.format("%Y-%m-%d %H:%M:%S").to_string());
+        }
+
+        Ok(TaskSummary {
+            task_name,
             start_time: start_time.format("%Y-%m-%d %H:%M:%S").to_string(),
-            end_time: None,
-            duration_minutes: None,
-        });
-    }
-
-    // 按開始時間倒序排列
-    task_sessions.sort_by(|a, b| b.start_time.cmp(&a.start_time));
-
-    Ok(task_sessions)
-}
-
-fn list_tasks(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare(
-        "SELECT datetime, task_name, action FROM tasks ORDER BY datetime ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
+            end_time: end_time_formatted,
+            duration_seconds,
+        })
     })?;
 
-    let mut start_times: HashMap<String, NaiveDateTime> = HashMap::new();
-    let mut totals: HashMap<String, chrono::Duration> = HashMap::new();
-
-    for row in rows {
-        let (dt_str, name, action) = row?;
-        let dt = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S%.f")
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            ))?;
-        if action == "start" {
-            start_times.insert(name.clone(), dt);
-        } else if action == "end" {
-            if let Some(start) = start_times.remove(&name) {
-                let diff = dt - start;
-                let entry = totals.entry(name.clone()).or_insert_with(|| chrono::Duration::zero());
-                *entry = *entry + diff;
-            }
-        }
+    let mut grouped_summaries: HashMap<String, Vec<TaskSummary>> = HashMap::new();
+    for summary_result in task_rows {
+        let summary = summary_result?;
+        grouped_summaries.entry(summary.task_name.clone()).or_insert_with(Vec::new).push(summary);
     }
 
-    for (name, duration) in totals {
-        println!("Task '{}' total time: {} seconds", name, duration.num_seconds());
-    }
-
-    Ok(())
+    Ok(grouped_summaries)
 }
