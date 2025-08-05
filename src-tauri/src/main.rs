@@ -342,16 +342,32 @@ impl AppState {
 
 // Tauri 命令：開始任務
 #[tauri::command]
-fn start_task(name: String, state: tauri::State<Mutex<AppState>>) -> Result<(), String> {
+fn start_task(name: String, state: tauri::State<Mutex<AppState>>, app_handle: AppHandle) -> Result<(), String> {
     let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
-    app_state.start_task(name)
+    let result = app_state.start_task(name);
+    
+    // 狀態改變後更新托盤選單
+    if result.is_ok() {
+        drop(app_state); // 釋放鎖定
+        update_tray_menu(&app_handle);
+    }
+    
+    result
 }
 
 // Tauri 命令：停止目前任務
 #[tauri::command]
-fn stop_task(state: tauri::State<Mutex<AppState>>) -> Result<(), String> {
+fn stop_task(state: tauri::State<Mutex<AppState>>, app_handle: AppHandle) -> Result<(), String> {
     let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
-    app_state.stop_current_task()
+    let result = app_state.stop_current_task();
+    
+    // 狀態改變後更新托盤選單
+    if result.is_ok() {
+        drop(app_state); // 釋放鎖定
+        update_tray_menu(&app_handle);
+    }
+    
+    result
 }
 
 // Tauri 命令：取得目前狀態
@@ -411,17 +427,58 @@ fn get_current_timestamp() -> u64 {
         .as_secs()
 }
 
-// 更新托盤標題
+// 更新托盤標題（不更新選單以避免選單消失）
 fn update_tray_title(app_handle: &AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
         if let Ok(app_state) = state.lock() {
             let title = app_state.get_tray_title();
             
-            // 嘗試取得托盤並更新標題
+            // 只更新標題，不重建選單
             if let Some(tray) = app_handle.tray_by_id("main") {
                 let _ = tray.set_title(Some(&title));
             }
         }
+    }
+}
+
+// 更新托盤選單（僅在狀態改變時調用）
+fn update_tray_menu(app_handle: &AppHandle) {
+    if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+        if let Ok(app_state) = state.lock() {
+            let has_active = app_state.has_active_task();
+            
+            // 重建選單
+            if let Some(tray) = app_handle.tray_by_id("main") {
+                if let Ok(new_menu) = build_tray_menu(app_handle, has_active) {
+                    let _ = tray.set_menu(Some(new_menu));
+                }
+            }
+        }
+    }
+}
+
+// 建立托盤選單
+fn build_tray_menu(app_handle: &AppHandle, has_active_task: bool) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
+    if has_active_task {
+        // 有進行中的任務時顯示「停止計時」
+        let stop_task = MenuItemBuilder::with_id("stop_task", "⏹️ 停止計時").build(app_handle)?;
+        let separator = tauri::menu::PredefinedMenuItem::separator(app_handle)?;
+        let show_window = MenuItemBuilder::with_id("show_window", "📱 顯示主視窗").build(app_handle)?;
+        let quit = MenuItemBuilder::with_id("quit", "❌ 結束應用程式").build(app_handle)?;
+        
+        MenuBuilder::new(app_handle)
+            .items(&[&stop_task, &separator, &show_window, &quit])
+            .build()
+    } else {
+        // 無進行中任務時顯示「快速開始」
+        let quick_start = MenuItemBuilder::with_id("quick_start", "▶️ 快速開始計時").build(app_handle)?;
+        let separator = tauri::menu::PredefinedMenuItem::separator(app_handle)?;
+        let show_window = MenuItemBuilder::with_id("show_window", "📱 顯示主視窗").build(app_handle)?;
+        let quit = MenuItemBuilder::with_id("quit", "❌ 結束應用程式").build(app_handle)?;
+        
+        MenuBuilder::new(app_handle)
+            .items(&[&quick_start, &separator, &show_window, &quit])
+            .build()
     }
 }
 
@@ -430,6 +487,7 @@ fn start_tray_updater(app_handle: AppHandle) {
     thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_secs(1));
+            // 只更新標題，不更新選單（避免選單消失）
             update_tray_title(&app_handle);
         }
     });
@@ -448,30 +506,75 @@ fn main() {
             // 初始化應用程式狀態
             let app_state = AppState::load_from_file();
             let initial_title = app_state.get_tray_title();
+            let has_initial_active = app_state.has_active_task();
             app.manage(Mutex::new(app_state));
 
-            // 創建系統托盤菜單
-            let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&quit]).build()?;
+            // 創建初始系統托盤菜單
+            let menu = build_tray_menu(&app.handle(), has_initial_active)?;
 
             // 創建系統托盤圖標
             let _tray = TrayIconBuilder::with_id("main")  // 設置托盤 ID
                 .menu(&menu)
                 .title(&initial_title)  // 使用動態標題
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "quit" => {
-                        // 在退出前確保資料已儲存
-                        if let Some(state) = app.try_state::<Mutex<AppState>>() {
-                            if let Ok(mut app_state) = state.lock() {
-                                // 如果有進行中的任務，先結束它
-                                if app_state.current_task.is_some() {
-                                    let _ = app_state.stop_current_task();
+                .on_menu_event(move |app, event| {
+                    let event_id = event.id.as_ref();
+                    match event_id {
+                        "quit" => {
+                            // 在退出前確保資料已儲存
+                            if let Some(state) = app.try_state::<Mutex<AppState>>() {
+                                if let Ok(mut app_state) = state.lock() {
+                                    // 如果有進行中的任務，先結束它
+                                    if app_state.current_task.is_some() {
+                                        let _ = app_state.stop_current_task();
+                                    }
+                                }
+                            }
+                            app.exit(0);
+                        }
+                        "show_window" => {
+                            // 顯示主視窗
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "stop_task" => {
+                            // 停止目前任務
+                            if let Some(state) = app.try_state::<Mutex<AppState>>() {
+                                if let Ok(mut app_state) = state.lock() {
+                                    if let Err(e) = app_state.stop_current_task() {
+                                        eprintln!("托盤停止任務失敗: {}", e);
+                                    } else {
+                                        println!("✅ 透過托盤停止任務");
+                                        // 狀態改變後更新選單
+                                        drop(app_state); // 釋放鎖定
+                                        update_tray_menu(app);
+                                    }
+                                } else {
+                                    eprintln!("❌ 無法取得應用程式狀態鎖定");
                                 }
                             }
                         }
-                        app.exit(0);
+                        "quick_start" => {
+                            // 快速開始計時（預設任務名稱）
+                            if let Some(state) = app.try_state::<Mutex<AppState>>() {
+                                if let Ok(mut app_state) = state.lock() {
+                                    let task_name = "快速任務".to_string();
+                                    if let Err(e) = app_state.start_task(task_name.clone()) {
+                                        eprintln!("托盤開始任務失敗: {}", e);
+                                    } else {
+                                        println!("✅ 透過托盤開始任務: {}", task_name);
+                                        // 狀態改變後更新選單
+                                        drop(app_state); // 釋放鎖定
+                                        update_tray_menu(app);
+                                    }
+                                } else {
+                                    eprintln!("❌ 無法取得應用程式狀態鎖定");
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
