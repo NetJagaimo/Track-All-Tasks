@@ -47,6 +47,25 @@ pub struct DateStats {
     pub tasks: Vec<TaskSummary>,            // 該日期的任務統計
 }
 
+// 匯出參數結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportParams {
+    pub format: String,                     // 匯出格式：csv 或 json
+    pub export_type: String,                // 匯出類型：records 或 summaries
+    pub task_name: Option<String>,          // 任務名稱過濾器（可選）
+    pub start_date: Option<String>,         // 開始日期 (YYYY-MM-DD)
+    pub end_date: Option<String>,           // 結束日期 (YYYY-MM-DD)
+}
+
+// 匯出結果結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportResult {
+    pub success: bool,                      // 匯出是否成功
+    pub file_path: Option<String>,          // 匯出檔案路徑
+    pub record_count: usize,                // 匯出的記錄數量
+    pub message: String,                    // 結果訊息
+}
+
 // 任務統計資料結構
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSummary {
@@ -690,6 +709,280 @@ impl AppState {
         
         date_stats
     }
+
+    // 匯出資料
+    pub fn export_data(&self, params: &ExportParams) -> Result<ExportResult, String> {
+        // 產生檔案名稱
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let datetime = match UNIX_EPOCH.checked_add(Duration::from_secs(timestamp)) {
+            Some(time) => match SystemTime::try_from(time) {
+                Ok(system_time) => {
+                    let datetime: DateTime<Local> = system_time.into();
+                    datetime.format("%Y%m%d_%H%M%S").to_string()
+                }
+                Err(_) => timestamp.to_string(),
+            },
+            None => timestamp.to_string(),
+        };
+
+        let file_extension = match params.format.as_str() {
+            "csv" => "csv",
+            "json" => "json",
+            _ => return Err("不支援的匯出格式".to_string()),
+        };
+
+        let export_type_name = match params.export_type.as_str() {
+            "records" => "records",
+            "summaries" => "summaries",
+            _ => return Err("不支援的匯出類型".to_string()),
+        };
+
+        let base_filename = format!("track-all-tasks-{}-{}.{}", export_type_name, datetime, file_extension);
+        
+        // 獲取桌面路徑
+        let desktop_path = dirs::desktop_dir()
+            .ok_or_else(|| "無法取得桌面路徑".to_string())?;
+        
+        let file_path = desktop_path.join(&base_filename);
+
+        match params.export_type.as_str() {
+            "records" => {
+                // 匯出任務記錄
+                let query_params = TaskQueryParams {
+                    task_name: params.task_name.clone(),
+                    start_date: params.start_date.clone(),
+                    end_date: params.end_date.clone(),
+                    page: None,
+                    page_size: None,
+                };
+                
+                let query_result = self.query_task_records(&query_params);
+                
+                match params.format.as_str() {
+                    "csv" => {
+                        self.export_records_to_csv(&query_result.records, &file_path)?;
+                    }
+                    "json" => {
+                        self.export_records_to_json(&query_result.records, &file_path)?;
+                    }
+                    _ => return Err("不支援的匯出格式".to_string()),
+                }
+
+                Ok(ExportResult {
+                    success: true,
+                    file_path: Some(file_path.to_string_lossy().to_string()),
+                    record_count: query_result.records.len(),
+                    message: format!("成功匯出 {} 筆記錄到 {}", query_result.records.len(), base_filename),
+                })
+            }
+            "summaries" => {
+                // 匯出任務統計
+                let summaries = if params.start_date.is_some() || params.end_date.is_some() || params.task_name.is_some() {
+                    // 如果有篩選條件，使用查詢結果來生成統計
+                    let query_params = TaskQueryParams {
+                        task_name: params.task_name.clone(),
+                        start_date: params.start_date.clone(),
+                        end_date: params.end_date.clone(),
+                        page: None,
+                        page_size: None,
+                    };
+                    
+                    let query_result = self.query_task_records(&query_params);
+                    self.records_to_summaries(&query_result.records)
+                } else {
+                    // 否則使用全部統計
+                    self.get_task_summaries()
+                };
+
+                match params.format.as_str() {
+                    "csv" => {
+                        self.export_summaries_to_csv(&summaries, &file_path)?;
+                    }
+                    "json" => {
+                        self.export_summaries_to_json(&summaries, &file_path)?;
+                    }
+                    _ => return Err("不支援的匯出格式".to_string()),
+                }
+
+                Ok(ExportResult {
+                    success: true,
+                    file_path: Some(file_path.to_string_lossy().to_string()),
+                    record_count: summaries.len(),
+                    message: format!("成功匯出 {} 項統計到 {}", summaries.len(), base_filename),
+                })
+            }
+            _ => Err("不支援的匯出類型".to_string()),
+        }
+    }
+
+    // 將記錄列表轉換為統計
+    fn records_to_summaries(&self, records: &[TaskRecord]) -> Vec<TaskSummary> {
+        let mut task_groups: HashMap<String, Vec<&TaskRecord>> = HashMap::new();
+        
+        for record in records {
+            task_groups.entry(record.name.clone())
+                .or_insert_with(Vec::new)
+                .push(record);
+        }
+
+        let mut summaries: Vec<TaskSummary> = task_groups
+            .into_iter()
+            .map(|(name, task_records)| {
+                let total_duration_seconds: u64 = task_records
+                    .iter()
+                    .map(|r| r.duration_seconds.unwrap_or(0))
+                    .sum();
+                
+                let session_count = task_records.len() as u32;
+                let average_duration_seconds = if session_count > 0 {
+                    total_duration_seconds / session_count as u64
+                } else {
+                    0
+                };
+                
+                let first_session_time = task_records
+                    .iter()
+                    .map(|r| r.start_time)
+                    .min()
+                    .unwrap_or(0);
+                
+                let last_session_time = task_records
+                    .iter()
+                    .map(|r| r.start_time)
+                    .max()
+                    .unwrap_or(0);
+                
+                TaskSummary {
+                    name,
+                    total_duration_seconds,
+                    session_count,
+                    total_duration_formatted: TaskRecord::format_duration(total_duration_seconds),
+                    first_session_time,
+                    last_session_time,
+                    average_duration_seconds,
+                }
+            })
+            .collect();
+
+        // 按總時長排序（降冪）
+        summaries.sort_by(|a, b| b.total_duration_seconds.cmp(&a.total_duration_seconds));
+        
+        summaries
+    }
+
+    // 匯出記錄到 CSV
+    fn export_records_to_csv(&self, records: &[TaskRecord], file_path: &PathBuf) -> Result<(), String> {
+        let mut csv_content = String::new();
+        
+        // CSV 標題行
+        csv_content.push_str("任務名稱,開始時間,結束時間,持續時間(秒),格式化時間,任務ID\n");
+        
+        for record in records {
+            let start_time_str = self.timestamp_to_string(record.start_time);
+            let end_time_str = record.end_time
+                .map(|t| self.timestamp_to_string(t))
+                .unwrap_or_else(|| "進行中".to_string());
+            let duration = record.duration_seconds.unwrap_or(0);
+            let formatted_duration = TaskRecord::format_duration(duration);
+            
+            // 轉義 CSV 欄位中的引號和逗號
+            let escaped_name = self.escape_csv_field(&record.name);
+            
+            csv_content.push_str(&format!(
+                "{},{},{},{},{},{}\n",
+                escaped_name,
+                start_time_str,
+                end_time_str,
+                duration,
+                formatted_duration,
+                record.id
+            ));
+        }
+        
+        fs::write(file_path, csv_content)
+            .map_err(|e| format!("寫入 CSV 檔案失敗: {}", e))?;
+        
+        Ok(())
+    }
+
+    // 匯出記錄到 JSON
+    fn export_records_to_json(&self, records: &[TaskRecord], file_path: &PathBuf) -> Result<(), String> {
+        let json_content = serde_json::to_string_pretty(records)
+            .map_err(|e| format!("序列化 JSON 失敗: {}", e))?;
+        
+        fs::write(file_path, json_content)
+            .map_err(|e| format!("寫入 JSON 檔案失敗: {}", e))?;
+        
+        Ok(())
+    }
+
+    // 匯出統計到 CSV
+    fn export_summaries_to_csv(&self, summaries: &[TaskSummary], file_path: &PathBuf) -> Result<(), String> {
+        let mut csv_content = String::new();
+        
+        // CSV 標題行
+        csv_content.push_str("任務名稱,總時長(秒),格式化總時長,工作階段數,平均時長(秒),首次記錄時間,最後記錄時間\n");
+        
+        for summary in summaries {
+            let first_time_str = self.timestamp_to_string(summary.first_session_time);
+            let last_time_str = self.timestamp_to_string(summary.last_session_time);
+            let escaped_name = self.escape_csv_field(&summary.name);
+            
+            csv_content.push_str(&format!(
+                "{},{},{},{},{},{},{}\n",
+                escaped_name,
+                summary.total_duration_seconds,
+                summary.total_duration_formatted,
+                summary.session_count,
+                summary.average_duration_seconds,
+                first_time_str,
+                last_time_str
+            ));
+        }
+        
+        fs::write(file_path, csv_content)
+            .map_err(|e| format!("寫入 CSV 檔案失敗: {}", e))?;
+        
+        Ok(())
+    }
+
+    // 匯出統計到 JSON
+    fn export_summaries_to_json(&self, summaries: &[TaskSummary], file_path: &PathBuf) -> Result<(), String> {
+        let json_content = serde_json::to_string_pretty(summaries)
+            .map_err(|e| format!("序列化 JSON 失敗: {}", e))?;
+        
+        fs::write(file_path, json_content)
+            .map_err(|e| format!("寫入 JSON 檔案失敗: {}", e))?;
+        
+        Ok(())
+    }
+
+    // 時間戳轉換為字串
+    fn timestamp_to_string(&self, timestamp: u64) -> String {
+        match UNIX_EPOCH.checked_add(Duration::from_secs(timestamp)) {
+            Some(time) => match SystemTime::try_from(time) {
+                Ok(system_time) => {
+                    let datetime: DateTime<Local> = system_time.into();
+                    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+                }
+                Err(_) => timestamp.to_string(),
+            },
+            None => timestamp.to_string(),
+        }
+    }
+
+    // 轉義 CSV 欄位
+    fn escape_csv_field(&self, field: &str) -> String {
+        if field.contains(',') || field.contains('"') || field.contains('\n') {
+            format!("\"{}\"", field.replace('"', "\"\""))
+        } else {
+            field.to_string()
+        }
+    }
 }
 
 // Tauri 命令：開始任務
@@ -812,6 +1105,13 @@ fn query_task_records(params: TaskQueryParams, state: tauri::State<Mutex<AppStat
 fn get_date_stats(start_date: Option<String>, end_date: Option<String>, state: tauri::State<Mutex<AppState>>) -> Result<Vec<DateStats>, String> {
     let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
     Ok(app_state.get_date_stats(start_date, end_date))
+}
+
+// Tauri 命令：匯出資料
+#[tauri::command]
+fn export_data(params: ExportParams, state: tauri::State<Mutex<AppState>>) -> Result<ExportResult, String> {
+    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    app_state.export_data(&params)
 }
 
 // 更新托盤標題（不更新選單以避免選單消失）
@@ -1067,6 +1367,7 @@ fn main() {
             get_task_records_by_name,
             query_task_records,
             get_date_stats,
+            export_data,
             greet
         ])
         .run(tauri::generate_context!())

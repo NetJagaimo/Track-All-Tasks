@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import taskStatistics from './task-statistics.js';
 import taskQuery from './task-query.js';
+import taskExport from './task-export.js';
 
 // 應用程式主類
 class TaskTrackerApp {
@@ -123,9 +124,9 @@ class TaskTrackerApp {
             });
         });
         
-        // 其他按鈕（暫時只記錄點擊）
+        // 匯出按鈕
         this.elements['export-btn']?.addEventListener('click', () => {
-            console.log('匯出功能');
+            this.showExportModal();
         });
         
         this.elements['settings-btn']?.addEventListener('click', () => {
@@ -789,6 +790,61 @@ class TaskTrackerApp {
                 <div class="empty-text">輸入搜尋條件開始查詢</div>
             </div>
         `;
+    }
+
+    // 顯示匯出模態視窗
+    showExportModal() {
+        // 創建模態視窗
+        const modal = document.createElement('div');
+        modal.className = 'export-modal';
+        modal.innerHTML = `
+            <div class="export-modal-content">
+                <div class="export-modal-header">
+                    <h3>📤 匯出資料</h3>
+                    <button class="export-modal-close">×</button>
+                </div>
+                <div class="export-modal-body">
+                    <div id="export-ui-container"></div>
+                </div>
+            </div>
+        `;
+
+        // 添加到 DOM
+        document.body.appendChild(modal);
+
+        // 創建匯出介面
+        taskExport.createExportUI('export-ui-container');
+
+        // 綁定關閉事件
+        const closeBtn = modal.querySelector('.export-modal-close');
+        closeBtn.addEventListener('click', () => {
+            this.hideExportModal(modal);
+        });
+
+        // 點擊外部關閉
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                this.hideExportModal(modal);
+            }
+        });
+
+        // ESC 鍵關閉
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                this.hideExportModal(modal);
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+
+        console.log('📤 匯出模態視窗已開啟');
+    }
+
+    // 隱藏匯出模態視窗
+    hideExportModal(modal) {
+        if (modal && modal.parentNode) {
+            modal.parentNode.removeChild(modal);
+        }
     }
 }
 
