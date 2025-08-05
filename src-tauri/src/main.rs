@@ -83,6 +83,23 @@ pub struct TaskEditResult {
     pub message: String,                    // 結果訊息
 }
 
+// 手動補登任務參數結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManualTaskParams {
+    pub name: String,                       // 任務名稱
+    pub start_time: u64,                    // 開始時間（Unix 時間戳）
+    pub end_time: u64,                      // 結束時間（Unix 時間戳）
+    pub description: Option<String>,        // 任務描述（可選）
+}
+
+// 手動補登任務結果結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManualTaskResult {
+    pub success: bool,                      // 補登是否成功
+    pub created_task: Option<TaskRecord>,   // 創建的任務記錄
+    pub message: String,                    // 結果訊息
+}
+
 // 任務統計資料結構
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSummary {
@@ -156,6 +173,29 @@ impl TaskRecord {
             start_time: now,
             end_time: None,
             duration_seconds: None,
+            created_at: now,
+        }
+    }
+
+    // 建立手動補登的任務記錄
+    pub fn new_manual(name: String, start_time: u64, end_time: u64) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let duration_seconds = if end_time > start_time {
+            Some(end_time - start_time)
+        } else {
+            None
+        };
+        
+        Self {
+            id: format!("manual-{}-{}", now, uuid::Uuid::new_v4().to_string()[..8].to_string()),
+            name,
+            start_time,
+            end_time: Some(end_time),
+            duration_seconds,
             created_at: now,
         }
     }
@@ -1044,8 +1084,8 @@ impl AppState {
                         return Err("開始時間不能晚於或等於結束時間".to_string());
                     }
                     task.duration_seconds = Some(end_time - new_start_time);
-                } else if task.is_completed {
-                    // 如果任務已完成但沒有結束時間，這是個異常情況，修正它
+                } else if task.duration_seconds.is_some() {
+                    // 如果任務有持續時間但沒有結束時間，這是個異常情況，修正它
                     task.end_time = Some(new_start_time + task.duration_seconds.unwrap_or(0));
                     task.duration_seconds = Some(task.end_time.unwrap() - new_start_time);
                 }
@@ -1059,7 +1099,6 @@ impl AppState {
                 
                 let old_end_time = task.end_time;
                 task.end_time = Some(new_end_time);
-                task.is_completed = true;
                 task.duration_seconds = Some(new_end_time - task.start_time);
                 
                 let old_time_str = old_end_time
@@ -1124,6 +1163,81 @@ impl AppState {
         } else {
             Err("找不到指定的任務記錄".to_string())
         }
+    }
+
+    // 手動補登任務記錄
+    pub fn add_manual_task(&mut self, params: &ManualTaskParams) -> Result<ManualTaskResult, String> {
+        // 驗證任務名稱
+        if params.name.trim().is_empty() {
+            return Err("任務名稱不能為空".to_string());
+        }
+        if params.name.len() > 100 {
+            return Err("任務名稱不能超過 100 個字元".to_string());
+        }
+
+        // 驗證時間戳
+        self.validate_timestamp(params.start_time)?;
+        self.validate_timestamp(params.end_time)?;
+
+        // 驗證時間邏輯
+        if params.end_time <= params.start_time {
+            return Err("結束時間必須晚於開始時間".to_string());
+        }
+
+        // 檢查持續時間是否合理（不超過24小時）
+        let duration_seconds = params.end_time - params.start_time;
+        if duration_seconds > 86400 {
+            return Err("單次任務持續時間不能超過24小時".to_string());
+        }
+
+        // 檢查是否與現有任務時間重疊
+        for existing_task in &self.task_history {
+            if let Some(existing_end) = existing_task.end_time {
+                // 檢查時間重疊
+                let overlap = !(params.end_time <= existing_task.start_time || 
+                               params.start_time >= existing_end);
+                if overlap {
+                    return Err(format!(
+                        "時間與現有任務「{}」重疊（{} ~ {}）", 
+                        existing_task.name,
+                        self.timestamp_to_string(existing_task.start_time),
+                        self.timestamp_to_string(existing_end)
+                    ));
+                }
+            }
+        }
+
+        // 創建手動任務記錄
+        let manual_task = TaskRecord::new_manual(
+            params.name.trim().to_string(),
+            params.start_time,
+            params.end_time
+        );
+
+        // 添加到任務歷史並按時間排序
+        self.task_history.push(manual_task.clone());
+        self.task_history.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+
+        // 儲存到檔案
+        if let Err(e) = self.save_to_file() {
+            // 如果儲存失敗，移除剛新增的任務
+            self.task_history.retain(|t| t.id != manual_task.id);
+            return Err(format!("儲存任務失敗: {}", e));
+        }
+
+        let message = format!(
+            "成功補登任務「{}」，時間：{} ~ {}，持續時間：{}",
+            manual_task.name,
+            self.timestamp_to_string(manual_task.start_time),
+            self.timestamp_to_string(manual_task.end_time.unwrap()),
+            TaskRecord::format_duration(duration_seconds)
+        );
+
+        Ok(ManualTaskResult {
+            success: true,
+            created_task: Some(manual_task),
+            message,
+        })
     }
 
     // 驗證時間戳是否合理
@@ -1281,6 +1395,13 @@ fn edit_task(params: TaskEditParams, state: tauri::State<Mutex<AppState>>) -> Re
 fn delete_task(task_id: String, state: tauri::State<Mutex<AppState>>) -> Result<String, String> {
     let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
     app_state.delete_task(&task_id)
+}
+
+// Tauri 命令：手動補登任務
+#[tauri::command]
+fn add_manual_task(params: ManualTaskParams, state: tauri::State<Mutex<AppState>>) -> Result<ManualTaskResult, String> {
+    let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    app_state.add_manual_task(&params)
 }
 
 // 更新托盤標題（不更新選單以避免選單消失）
@@ -1539,6 +1660,7 @@ fn main() {
             export_data,
             edit_task,
             delete_task,
+            add_manual_task,
             greet
         ])
         .run(tauri::generate_context!())

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import taskStatistics from './task-statistics.js';
 import taskQuery from './task-query.js';
 import taskExport from './task-export.js';
+import manualTaskEntry from './task-manual-entry.js';
 
 // 應用程式主類
 class TaskTrackerApp {
@@ -67,7 +68,7 @@ class TaskTrackerApp {
             'today-statistics', 'all-statistics', 'history-statistics', 'search-statistics',
             'date-stats-container', 'search-results-container',
             'search-task-name', 'search-start-date', 'search-end-date', 'search-btn', 'clear-search-btn',
-            'export-btn', 'settings-btn'
+            'manual-entry-btn', 'export-btn', 'settings-btn'
         ];
 
         elements.forEach(id => {
@@ -122,6 +123,11 @@ class TaskTrackerApp {
             btn.addEventListener('click', (e) => {
                 this.handleHistoryFilter(e.target.dataset.period);
             });
+        });
+        
+        // 手動補登按鈕
+        this.elements['manual-entry-btn']?.addEventListener('click', () => {
+            this.showManualEntryModal();
         });
         
         // 匯出按鈕
@@ -790,6 +796,26 @@ class TaskTrackerApp {
                 <div class="empty-text">輸入搜尋條件開始查詢</div>
             </div>
         `;
+    }
+
+    // 顯示手動補登模態視窗
+    showManualEntryModal() {
+        manualTaskEntry.showManualEntryForm(
+            (result) => {
+                // 補登成功回調
+                console.log('✅ 任務補登成功：', result.message);
+                
+                // 重新載入統計資料
+                this.updateStatistics();
+                
+                // 重新載入任務歷史
+                this.loadTaskHistory();
+            },
+            () => {
+                // 取消回調
+                console.log('📝 取消補登任務');
+            }
+        );
     }
 
     // 顯示匯出模態視窗
