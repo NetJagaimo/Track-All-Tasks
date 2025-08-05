@@ -12,6 +12,88 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
+use std::collections::HashMap;
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Datelike, Duration as ChronoDuration};
+
+// 查詢參數結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskQueryParams {
+    pub task_name: Option<String>,          // 任務名稱過濾器（可選）
+    pub start_date: Option<String>,         // 開始日期 (YYYY-MM-DD)
+    pub end_date: Option<String>,           // 結束日期 (YYYY-MM-DD)
+    pub page: Option<usize>,                // 分頁頁碼（從 1 開始）
+    pub page_size: Option<usize>,           // 每頁記錄數量
+}
+
+// 查詢結果結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskQueryResult {
+    pub records: Vec<TaskRecord>,           // 查詢到的記錄
+    pub total_count: usize,                 // 總記錄數
+    pub total_pages: usize,                 // 總頁數
+    pub current_page: usize,                // 當前頁碼
+    pub page_size: usize,                   // 每頁記錄數
+    pub total_duration_seconds: u64,        // 總時長（秒）
+    pub total_duration_formatted: String,   // 格式化總時長
+}
+
+// 日期統計結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DateStats {
+    pub date: String,                       // 日期 (YYYY-MM-DD)
+    pub task_count: usize,                  // 任務數量
+    pub total_duration_seconds: u64,        // 總時長（秒）
+    pub total_duration_formatted: String,   // 格式化總時長
+    pub tasks: Vec<TaskSummary>,            // 該日期的任務統計
+}
+
+// 任務統計資料結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSummary {
+    pub name: String,                     // 任務名稱
+    pub total_duration_seconds: u64,      // 總計時間（秒）
+    pub session_count: u32,               // 計時次數
+    pub total_duration_formatted: String, // 格式化的總計時間
+    pub first_session_time: u64,          // 第一次開始時間
+    pub last_session_time: u64,           // 最後一次開始時間
+    pub average_duration_seconds: u64,    // 平均計時時間（秒）
+}
+
+impl TaskSummary {
+    pub fn new(name: String, records: &[&TaskRecord]) -> Self {
+        let total_duration: u64 = records.iter().map(|r| r.get_duration()).sum();
+        let session_count = records.len() as u32;
+        let average_duration = if session_count > 0 { total_duration / session_count as u64 } else { 0 };
+        
+        let first_session_time = records.iter().map(|r| r.start_time).min().unwrap_or(0);
+        let last_session_time = records.iter().map(|r| r.start_time).max().unwrap_or(0);
+
+        Self {
+            name: name.clone(),
+            total_duration_seconds: total_duration,
+            session_count,
+            total_duration_formatted: TaskRecord::format_duration(total_duration),
+            first_session_time,
+            last_session_time,
+            average_duration_seconds: average_duration,
+        }
+    }
+
+    // 取得第一次開始時間的格式化字串
+    pub fn get_first_session_formatted(&self) -> String {
+        TaskRecord::format_timestamp(self.first_session_time)
+    }
+
+    // 取得最後一次開始時間的格式化字串
+    pub fn get_last_session_formatted(&self) -> String {
+        TaskRecord::format_timestamp(self.last_session_time)
+    }
+
+    // 取得平均時間的格式化字串
+    pub fn get_average_duration_formatted(&self) -> String {
+        TaskRecord::format_duration(self.average_duration_seconds)
+    }
+}
 
 // 任務記錄資料結構
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,6 +405,85 @@ impl AppState {
         self.current_task.as_ref().map(|task| task.id.clone())
     }
 
+    // 按任務名稱分組統計所有歷史記錄
+    pub fn get_task_summaries(&self) -> Vec<TaskSummary> {
+        let mut task_groups: HashMap<String, Vec<&TaskRecord>> = HashMap::new();
+        
+        // 將所有完成的任務按名稱分組
+        for task in &self.task_history {
+            task_groups.entry(task.name.clone())
+                .or_insert_with(Vec::new)
+                .push(task);
+        }
+
+        // 生成統計摘要並按總時間排序
+        let mut summaries: Vec<TaskSummary> = task_groups
+            .into_iter()
+            .map(|(name, records)| TaskSummary::new(name, &records))
+            .collect();
+
+        // 按總計時間降序排列
+        summaries.sort_by(|a, b| b.total_duration_seconds.cmp(&a.total_duration_seconds));
+        
+        summaries
+    }
+
+    // 按任務名稱分組統計今日記錄
+    pub fn get_today_task_summaries(&self) -> Vec<TaskSummary> {
+        let today_start = Self::get_today_start_timestamp();
+        let mut task_groups: HashMap<String, Vec<&TaskRecord>> = HashMap::new();
+        
+        // 篩選今日的任務並按名稱分組
+        for task in &self.task_history {
+            if task.start_time >= today_start {
+                task_groups.entry(task.name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(task);
+            }
+        }
+
+        // 檢查是否有進行中的今日任務
+        if let Some(current) = &self.current_task {
+            if current.start_time >= today_start {
+                task_groups.entry(current.name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(current);
+            }
+        }
+
+        // 生成統計摘要並按總時間排序
+        let mut summaries: Vec<TaskSummary> = task_groups
+            .into_iter()
+            .map(|(name, records)| TaskSummary::new(name, &records))
+            .collect();
+
+        // 按總計時間降序排列
+        summaries.sort_by(|a, b| b.total_duration_seconds.cmp(&a.total_duration_seconds));
+        
+        summaries
+    }
+
+    // 取得指定任務名稱的詳細記錄
+    pub fn get_task_records_by_name(&self, task_name: &str) -> Vec<TaskRecord> {
+        let mut records: Vec<TaskRecord> = self.task_history
+            .iter()
+            .filter(|task| task.name == task_name)
+            .cloned()
+            .collect();
+
+        // 如果目前任務名稱匹配，也加入
+        if let Some(current) = &self.current_task {
+            if current.name == task_name {
+                records.push(current.clone());
+            }
+        }
+
+        // 按開始時間排序（最新的在前）
+        records.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+        
+        records
+    }
+
     // 生成托盤標題
     pub fn get_tray_title(&self) -> String {
         match &self.current_task {
@@ -337,6 +498,197 @@ impl AppState {
             }
             None => "Track All Tasks - 待機中".to_string(),
         }
+    }
+
+    // 查詢任務記錄
+    pub fn query_task_records(&self, params: &TaskQueryParams) -> TaskQueryResult {
+        let mut filtered_records = Vec::new();
+        
+        // 收集所有已完成的任務記錄
+        for record in &self.task_history {
+            let mut include_record = true;
+            
+            // 任務名稱過濾
+            if let Some(ref filter_name) = params.task_name {
+                if !record.name.to_lowercase().contains(&filter_name.to_lowercase()) {
+                    include_record = false;
+                }
+            }
+            
+            // 日期範圍過濾
+            if include_record {
+                let record_timestamp = record.start_time;
+                let record_datetime = match UNIX_EPOCH.checked_add(Duration::from_secs(record_timestamp)) {
+                    Some(time) => match SystemTime::try_from(time) {
+                        Ok(system_time) => {
+                            let datetime: DateTime<Local> = system_time.into();
+                            Some(datetime)
+                        }
+                        Err(_) => None,
+                    },
+                    None => None,
+                };
+                
+                if let Some(datetime) = record_datetime {
+                    let record_date = datetime.format("%Y-%m-%d").to_string();
+                    
+                    // 檢查開始日期
+                    if let Some(ref start_date) = params.start_date {
+                        if record_date < *start_date {
+                            include_record = false;
+                        }
+                    }
+                    
+                    // 檢查結束日期
+                    if let Some(ref end_date) = params.end_date {
+                        if record_date > *end_date {
+                            include_record = false;
+                        }
+                    }
+                }
+            }
+            
+            if include_record {
+                filtered_records.push(record.clone());
+            }
+        }
+        
+        // 按開始時間排序（最新的在前）
+        filtered_records.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+        
+        // 計算總時長
+        let total_duration_seconds: u64 = filtered_records
+            .iter()
+            .map(|r| r.duration_seconds.unwrap_or(0))
+            .sum();
+        
+        // 分頁處理
+        let page = params.page.unwrap_or(1).max(1);
+        let page_size = params.page_size.unwrap_or(20).max(1).min(100);
+        let total_count = filtered_records.len();
+        let total_pages = (total_count + page_size - 1) / page_size;
+        
+        let start_index = (page - 1) * page_size;
+        let end_index = (start_index + page_size).min(total_count);
+        
+        let paginated_records = if start_index < total_count {
+            filtered_records[start_index..end_index].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        TaskQueryResult {
+            records: paginated_records,
+            total_count,
+            total_pages,
+            current_page: page,
+            page_size,
+            total_duration_seconds,
+            total_duration_formatted: TaskRecord::format_duration(total_duration_seconds),
+        }
+    }
+    
+    // 獲取日期統計列表
+    pub fn get_date_stats(&self, start_date: Option<String>, end_date: Option<String>) -> Vec<DateStats> {
+        let mut date_map: HashMap<String, Vec<&TaskRecord>> = HashMap::new();
+        
+        // 按日期分組任務記錄
+        for record in &self.task_history {
+            let record_timestamp = record.start_time;
+            if let Some(time) = UNIX_EPOCH.checked_add(Duration::from_secs(record_timestamp)) {
+                if let Ok(system_time) = SystemTime::try_from(time) {
+                    let datetime: DateTime<Local> = system_time.into();
+                    let date_str = datetime.format("%Y-%m-%d").to_string();
+                    
+                    // 檢查日期範圍
+                    let mut include_date = true;
+                    if let Some(ref start) = start_date {
+                        if date_str < *start {
+                            include_date = false;
+                        }
+                    }
+                    if let Some(ref end) = end_date {
+                        if date_str > *end {
+                            include_date = false;
+                        }
+                    }
+                    
+                    if include_date {
+                        date_map.entry(date_str).or_insert_with(Vec::new).push(record);
+                    }
+                }
+            }
+        }
+        
+        // 轉換為 DateStats
+        let mut date_stats: Vec<DateStats> = date_map
+            .into_iter()
+            .map(|(date, records)| {
+                // 按任務名稱分組
+                let mut task_groups: HashMap<String, Vec<&TaskRecord>> = HashMap::new();
+                for record in &records {
+                    task_groups.entry(record.name.clone()).or_insert_with(Vec::new).push(record);
+                }
+                
+                // 生成任務統計
+                let tasks: Vec<TaskSummary> = task_groups
+                    .into_iter()
+                    .map(|(name, task_records)| {
+                        let total_duration_seconds: u64 = task_records
+                            .iter()
+                            .map(|r| r.duration_seconds.unwrap_or(0))
+                            .sum();
+                        
+                        let session_count = task_records.len() as u32;
+                        let average_duration_seconds = if session_count > 0 {
+                            total_duration_seconds / session_count as u64
+                        } else {
+                            0
+                        };
+                        
+                        let first_session_time = task_records
+                            .iter()
+                            .map(|r| r.start_time)
+                            .min()
+                            .unwrap_or(0);
+                        
+                        let last_session_time = task_records
+                            .iter()
+                            .map(|r| r.start_time)
+                            .max()
+                            .unwrap_or(0);
+                        
+                        TaskSummary {
+                            name,
+                            total_duration_seconds,
+                            session_count,
+                            total_duration_formatted: TaskRecord::format_duration(total_duration_seconds),
+                            first_session_time,
+                            last_session_time,
+                            average_duration_seconds,
+                        }
+                    })
+                    .collect();
+                
+                let total_duration_seconds: u64 = records
+                    .iter()
+                    .map(|r| r.duration_seconds.unwrap_or(0))
+                    .sum();
+                
+                DateStats {
+                    date,
+                    task_count: records.len(),
+                    total_duration_seconds,
+                    total_duration_formatted: TaskRecord::format_duration(total_duration_seconds),
+                    tasks,
+                }
+            })
+            .collect();
+        
+        // 按日期排序（最新的在前）
+        date_stats.sort_by(|a, b| b.date.cmp(&a.date));
+        
+        date_stats
     }
 }
 
@@ -425,6 +777,41 @@ fn get_current_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+// Tauri 命令：取得所有任務統計摘要
+#[tauri::command]
+fn get_task_summaries(state: tauri::State<Mutex<AppState>>) -> Result<Vec<TaskSummary>, String> {
+    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    Ok(app_state.get_task_summaries())
+}
+
+// Tauri 命令：取得今日任務統計摘要
+#[tauri::command]
+fn get_today_task_summaries(state: tauri::State<Mutex<AppState>>) -> Result<Vec<TaskSummary>, String> {
+    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    Ok(app_state.get_today_task_summaries())
+}
+
+// Tauri 命令：取得指定任務名稱的詳細記錄
+#[tauri::command]
+fn get_task_records_by_name(task_name: String, state: tauri::State<Mutex<AppState>>) -> Result<Vec<TaskRecord>, String> {
+    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    Ok(app_state.get_task_records_by_name(&task_name))
+}
+
+// Tauri 命令：查詢任務記錄
+#[tauri::command]
+fn query_task_records(params: TaskQueryParams, state: tauri::State<Mutex<AppState>>) -> Result<TaskQueryResult, String> {
+    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    Ok(app_state.query_task_records(&params))
+}
+
+// Tauri 命令：獲取日期統計
+#[tauri::command]
+fn get_date_stats(start_date: Option<String>, end_date: Option<String>, state: tauri::State<Mutex<AppState>>) -> Result<Vec<DateStats>, String> {
+    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    Ok(app_state.get_date_stats(start_date, end_date))
 }
 
 // 更新托盤標題（不更新選單以避免選單消失）
@@ -675,6 +1062,11 @@ fn main() {
             get_current_timestamp,
             get_recent_task_names,
             get_task_history,
+            get_task_summaries,
+            get_today_task_summaries,
+            get_task_records_by_name,
+            query_task_records,
+            get_date_stats,
             greet
         ])
         .run(tauri::generate_context!())

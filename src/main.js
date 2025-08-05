@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import taskStatistics from './task-statistics.js';
+import taskQuery from './task-query.js';
 
 // 應用程式主類
 class TaskTrackerApp {
@@ -39,6 +41,9 @@ class TaskTrackerApp {
             // 載入初始資料
             await this.loadInitialData();
             
+            // 初始化統計功能
+            await this.initStatistics();
+            
             // 開始定期更新
             this.startPeriodicUpdate();
             
@@ -57,7 +62,11 @@ class TaskTrackerApp {
             'task-input', 'recent-tasks-dropdown', 'recent-tasks-list',
             'start-btn', 'stop-btn',
             'today-tasks-count', 'today-total-time',
-            'recent-history', 'view-all-btn', 'export-btn', 'settings-btn'
+            'today-stats-tab', 'all-stats-tab', 'history-tab', 'search-tab',
+            'today-statistics', 'all-statistics', 'history-statistics', 'search-statistics',
+            'date-stats-container', 'search-results-container',
+            'search-task-name', 'search-start-date', 'search-end-date', 'search-btn', 'clear-search-btn',
+            'export-btn', 'settings-btn'
         ];
 
         elements.forEach(id => {
@@ -80,11 +89,41 @@ class TaskTrackerApp {
         this.elements['task-input']?.addEventListener('keydown', this.handleTaskInputKeydown);
         this.elements['task-input']?.addEventListener('input', this.handleTaskInputInput);
         
-        // 其他按鈕（暫時只記錄點擊）
-        this.elements['view-all-btn']?.addEventListener('click', () => {
-            console.log('查看全部任務');
+        // 統計標籤頁切換
+        this.elements['today-stats-tab']?.addEventListener('click', () => {
+            this.switchStatisticsTab('today');
         });
         
+        this.elements['all-stats-tab']?.addEventListener('click', () => {
+            this.switchStatisticsTab('all');
+        });
+
+        this.elements['history-tab']?.addEventListener('click', () => {
+            this.switchStatisticsTab('history');
+        });
+
+        this.elements['search-tab']?.addEventListener('click', () => {
+            this.switchStatisticsTab('search');
+        });
+
+        // 搜尋功能
+        this.elements['search-btn']?.addEventListener('click', () => {
+            this.performSearch();
+        });
+
+        this.elements['clear-search-btn']?.addEventListener('click', () => {
+            this.clearSearch();
+        });
+
+        // 歷史統計快速篩選
+        const filterBtns = document.querySelectorAll('.filter-btn');
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                this.handleHistoryFilter(e.target.dataset.period);
+            });
+        });
+        
+        // 其他按鈕（暫時只記錄點擊）
         this.elements['export-btn']?.addEventListener('click', () => {
             console.log('匯出功能');
         });
@@ -223,6 +262,9 @@ class TaskTrackerApp {
             await this.updateDisplay();
             await this.loadRecentTaskNames();
             
+            // 更新統計
+            await this.updateStatistics();
+            
             console.log(`✅ 任務開始：${taskName}`);
             this.showSuccess(`任務「${taskName}」已開始`);
             
@@ -268,7 +310,9 @@ class TaskTrackerApp {
             
             // 立即更新顯示
             await this.updateDisplay();
-            await this.loadTaskHistory();
+            
+            // 更新統計
+            await this.updateStatistics();
             
             console.log("✅ 任務已停止");
             
@@ -549,6 +593,202 @@ class TaskTrackerApp {
     destroy() {
         this.stopPeriodicUpdate();
         this.isInitialized = false;
+    }
+
+    // 初始化統計功能
+    async initStatistics() {
+        try {
+            console.log("📊 初始化統計功能...");
+            
+            // 載入統計資料
+            await this.loadStatistics();
+            
+            console.log("✅ 統計功能初始化完成");
+            
+        } catch (error) {
+            console.error("❌ 統計功能初始化失敗：", error);
+        }
+    }
+
+    // 載入統計資料
+    async loadStatistics() {
+        try {
+            // 載入今日統計
+            const todaySummaries = await taskStatistics.loadTodayTaskSummaries();
+            taskStatistics.renderTaskSummaries(
+                todaySummaries, 
+                'today-statistics', 
+                {
+                    showSessionCount: true,
+                    showAverageTime: false,
+                    showLastSession: true,
+                    maxItems: 5,
+                    allowClick: true
+                }
+            );
+
+            // 載入全部統計
+            const allSummaries = await taskStatistics.loadAllTaskSummaries();
+            taskStatistics.renderTaskSummaries(
+                allSummaries, 
+                'all-statistics', 
+                {
+                    showSessionCount: true,
+                    showAverageTime: true,
+                    showLastSession: true,
+                    maxItems: 10,
+                    allowClick: true
+                }
+            );
+            
+        } catch (error) {
+            console.error("❌ 載入統計資料失敗：", error);
+        }
+    }
+
+    // 切換統計標籤頁
+    switchStatisticsTab(tabName) {
+        // 移除所有標籤的 active 類
+        this.elements['today-stats-tab']?.classList.remove('active');
+        this.elements['all-stats-tab']?.classList.remove('active');
+        this.elements['history-tab']?.classList.remove('active');
+        this.elements['search-tab']?.classList.remove('active');
+        this.elements['today-statistics']?.classList.remove('active');
+        this.elements['all-statistics']?.classList.remove('active');
+        this.elements['history-statistics']?.classList.remove('active');
+        this.elements['search-statistics']?.classList.remove('active');
+
+        // 啟用選中的標籤
+        if (tabName === 'today') {
+            this.elements['today-stats-tab']?.classList.add('active');
+            this.elements['today-statistics']?.classList.add('active');
+        } else if (tabName === 'all') {
+            this.elements['all-stats-tab']?.classList.add('active');
+            this.elements['all-statistics']?.classList.add('active');
+        } else if (tabName === 'history') {
+            this.elements['history-tab']?.classList.add('active');
+            this.elements['history-statistics']?.classList.add('active');
+            // 載入歷史統計
+            this.loadHistoryStats();
+        } else if (tabName === 'search') {
+            this.elements['search-tab']?.classList.add('active');
+            this.elements['search-statistics']?.classList.add('active');
+        }
+
+        const tabLabels = {
+            'today': '今日',
+            'all': '全部',
+            'history': '歷史',
+            'search': '搜尋'
+        };
+        console.log(`📊 切換到${tabLabels[tabName]}統計`);
+    }
+
+    // 更新統計資料（在任務狀態改變時調用）
+    async updateStatistics() {
+        if (!this.isInitialized) return;
+        
+        try {
+            await this.loadStatistics();
+        } catch (error) {
+            console.error("❌ 更新統計資料失敗：", error);
+        }
+    }
+
+    // 載入歷史統計
+    async loadHistoryStats(period = 'week') {
+        try {
+            let startDate = null;
+            let endDate = null;
+
+            const today = new Date();
+            
+            if (period === 'week') {
+                const startOfWeek = new Date(today);
+                startOfWeek.setDate(today.getDate() - today.getDay());
+                startDate = startOfWeek.toISOString().split('T')[0];
+                
+                const endOfWeek = new Date(startOfWeek);
+                endOfWeek.setDate(startOfWeek.getDate() + 6);
+                endDate = endOfWeek.toISOString().split('T')[0];
+            } else if (period === 'month') {
+                const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+                startDate = startOfMonth.toISOString().split('T')[0];
+                
+                const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+                endDate = endOfMonth.toISOString().split('T')[0];
+            }
+            // period === 'all' 時不設定日期範圍
+
+            const dateStats = await taskQuery.getDateStats(startDate, endDate);
+            taskQuery.renderDateStats(dateStats, 'date-stats-container');
+
+        } catch (error) {
+            console.error("❌ 載入歷史統計失敗：", error);
+            this.elements['date-stats-container'].innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">❌</div>
+                    <div class="empty-text">載入歷史統計失敗</div>
+                </div>
+            `;
+        }
+    }
+
+    // 處理歷史統計篩選
+    handleHistoryFilter(period) {
+        // 更新按鈕狀態
+        const filterBtns = document.querySelectorAll('.filter-btn');
+        filterBtns.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.period === period) {
+                btn.classList.add('active');
+            }
+        });
+
+        // 重新載入統計資料
+        this.loadHistoryStats(period);
+    }
+
+    // 執行搜尋
+    async performSearch() {
+        try {
+            const taskName = this.elements['search-task-name']?.value.trim();
+            const startDate = this.elements['search-start-date']?.value;
+            const endDate = this.elements['search-end-date']?.value;
+
+            const params = {};
+            if (taskName) params.task_name = taskName;
+            if (startDate) params.start_date = startDate;
+            if (endDate) params.end_date = endDate;
+
+            const result = await taskQuery.queryTaskRecords(params);
+            taskQuery.renderQueryResult(result, 'search-results-container');
+
+            console.log(`🔍 搜尋完成，找到 ${result.total_count} 筆記錄`);
+
+        } catch (error) {
+            console.error("❌ 搜尋失敗：", error);
+            this.elements['search-results-container'].innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">❌</div>
+                    <div class="empty-text">搜尋失敗，請重試</div>
+                </div>
+            `;
+        }
+    }
+
+    // 清除搜尋
+    clearSearch() {
+        this.elements['search-task-name'].value = '';
+        this.elements['search-start-date'].value = '';
+        this.elements['search-end-date'].value = '';
+        
+        this.elements['search-results-container'].innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🔍</div>
+                <div class="empty-text">輸入搜尋條件開始查詢</div>
+            </div>
+        `;
     }
 }
 
