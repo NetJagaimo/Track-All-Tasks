@@ -10,6 +10,11 @@ class TaskTrackerApp {
         // DOM 元素引用
         this.elements = {};
         
+        // 最近任務相關狀態
+        this.allRecentTasks = [];
+        this.filteredRecentTasks = [];
+        this.selectedTaskIndex = -1;
+        
         // 綁定方法的 this 上下文
         this.updateDisplay = this.updateDisplay.bind(this);
         this.handleStartTask = this.handleStartTask.bind(this);
@@ -17,6 +22,7 @@ class TaskTrackerApp {
         this.handleTaskInputFocus = this.handleTaskInputFocus.bind(this);
         this.handleTaskInputBlur = this.handleTaskInputBlur.bind(this);
         this.handleTaskInputKeydown = this.handleTaskInputKeydown.bind(this);
+        this.handleTaskInputInput = this.handleTaskInputInput.bind(this);
     }
 
     // 初始化應用程式
@@ -72,6 +78,7 @@ class TaskTrackerApp {
         this.elements['task-input']?.addEventListener('focus', this.handleTaskInputFocus);
         this.elements['task-input']?.addEventListener('blur', this.handleTaskInputBlur);
         this.elements['task-input']?.addEventListener('keydown', this.handleTaskInputKeydown);
+        this.elements['task-input']?.addEventListener('input', this.handleTaskInputInput);
         
         // 其他按鈕（暫時只記錄點擊）
         this.elements['view-all-btn']?.addEventListener('click', () => {
@@ -194,8 +201,10 @@ class TaskTrackerApp {
         const taskInput = this.elements['task-input'];
         const taskName = taskInput?.value.trim();
 
-        if (!taskName) {
-            this.showError('請輸入任務名稱');
+        // 輸入驗證
+        const validationResult = this.validateTaskName(taskName);
+        if (!validationResult.isValid) {
+            this.showError(validationResult.message);
             taskInput?.focus();
             return;
         }
@@ -208,17 +217,48 @@ class TaskTrackerApp {
             
             // 隱藏最近任務下拉選單
             this.hideRecentTasksDropdown();
+            this.resetSelection();
             
             // 立即更新顯示
             await this.updateDisplay();
             await this.loadRecentTaskNames();
             
             console.log(`✅ 任務開始：${taskName}`);
+            this.showSuccess(`任務「${taskName}」已開始`);
             
         } catch (error) {
             console.error("❌ 開始任務失敗：", error);
             this.showError('開始任務失敗：' + error);
         }
+    }
+
+    // 驗證任務名稱
+    validateTaskName(taskName) {
+        if (!taskName) {
+            return { isValid: false, message: '請輸入任務名稱' };
+        }
+        
+        if (taskName.length < 1) {
+            return { isValid: false, message: '任務名稱不能為空' };
+        }
+        
+        if (taskName.length > 100) {
+            return { isValid: false, message: '任務名稱不能超過 100 個字元' };
+        }
+        
+        // 檢查特殊字元（可選）
+        const invalidChars = /[<>:"\/\\|?*]/;
+        if (invalidChars.test(taskName)) {
+            return { isValid: false, message: '任務名稱不能包含特殊字元 < > : " / \\ | ? *' };
+        }
+        
+        return { isValid: true, message: '' };
+    }
+
+    // 顯示成功訊息
+    showSuccess(message) {
+        console.log("✅ 成功：", message);
+        // 可以之後改為更美觀的通知
     }
 
     // 處理停止任務
@@ -254,23 +294,112 @@ class TaskTrackerApp {
 
     // 處理任務輸入框按鍵
     handleTaskInputKeydown(event) {
+        const dropdown = this.elements['recent-tasks-dropdown'];
+        const isDropdownVisible = dropdown && dropdown.style.display === 'block';
+        
         if (event.key === 'Enter') {
+            // 如果有選中的任務，使用選中的任務
+            if (isDropdownVisible && this.selectedTaskIndex >= 0 && this.selectedTaskIndex < this.filteredRecentTasks.length) {
+                const selectedTask = this.filteredRecentTasks[this.selectedTaskIndex];
+                const taskInput = this.elements['task-input'];
+                if (taskInput) {
+                    taskInput.value = selectedTask;
+                }
+                this.hideRecentTasksDropdown();
+                this.resetSelection();
+            }
             this.handleStartTask();
         } else if (event.key === 'Escape') {
             this.hideRecentTasksDropdown();
+            this.resetSelection();
             event.target.blur();
+        } else if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (isDropdownVisible && this.filteredRecentTasks.length > 0) {
+                this.selectedTaskIndex = Math.min(this.selectedTaskIndex + 1, this.filteredRecentTasks.length - 1);
+                this.updateTaskSelection();
+            }
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (isDropdownVisible && this.filteredRecentTasks.length > 0) {
+                this.selectedTaskIndex = Math.max(this.selectedTaskIndex - 1, -1);
+                this.updateTaskSelection();
+            }
+        } else if (event.key === 'Tab') {
+            // Tab 鍵選擇第一個建議項目
+            if (isDropdownVisible && this.filteredRecentTasks.length > 0 && this.selectedTaskIndex === -1) {
+                event.preventDefault();
+                this.selectedTaskIndex = 0;
+                this.updateTaskSelection();
+                const taskInput = this.elements['task-input'];
+                if (taskInput) {
+                    taskInput.value = this.filteredRecentTasks[0];
+                }
+                this.hideRecentTasksDropdown();
+                this.resetSelection();
+            }
         }
+    }
+
+    // 處理任務輸入框內容變更
+    handleTaskInputInput(event) {
+        const inputValue = event.target.value.trim();
+        this.filterRecentTasks(inputValue);
+        this.resetSelection();
     }
 
     // 載入最近任務名稱
     async loadRecentTaskNames() {
         try {
             const recentNames = await invoke("get_recent_task_names");
-            this.displayRecentTaskNames(recentNames);
+            this.allRecentTasks = recentNames;
+            this.filteredRecentTasks = [...recentNames];
+            this.displayRecentTaskNames(this.filteredRecentTasks);
             
         } catch (error) {
             console.error("❌ 載入最近任務失敗：", error);
         }
+    }
+
+    // 過濾最近任務
+    filterRecentTasks(inputValue) {
+        if (!inputValue) {
+            this.filteredRecentTasks = [...this.allRecentTasks];
+        } else {
+            // 模糊搜尋：包含輸入字串的任務
+            this.filteredRecentTasks = this.allRecentTasks.filter(task => 
+                task.toLowerCase().includes(inputValue.toLowerCase())
+            );
+        }
+        
+        this.displayRecentTaskNames(this.filteredRecentTasks);
+        
+        // 如果有過濾結果且下拉選單隱藏，則顯示它
+        if (this.filteredRecentTasks.length > 0) {
+            this.showRecentTasksDropdown();
+        }
+    }
+
+    // 重置選擇狀態
+    resetSelection() {
+        this.selectedTaskIndex = -1;
+        this.updateTaskSelection();
+    }
+
+    // 更新任務選擇高亮
+    updateTaskSelection() {
+        const listElement = this.elements['recent-tasks-list'];
+        if (!listElement) return;
+
+        // 移除所有高亮
+        const items = listElement.querySelectorAll('.recent-item');
+        items.forEach((item, index) => {
+            if (index === this.selectedTaskIndex) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
     }
 
     // 顯示最近任務名稱
@@ -281,24 +410,63 @@ class TaskTrackerApp {
         listElement.innerHTML = '';
 
         if (names.length === 0) {
-            listElement.innerHTML = '<div class="recent-item" style="color: var(--text-muted); cursor: default;">尚無最近任務</div>';
+            const inputValue = this.elements['task-input']?.value.trim();
+            const emptyMessage = inputValue ? 
+                `沒有符合 "${inputValue}" 的最近任務` : 
+                '尚無最近任務';
+            listElement.innerHTML = `<div class="recent-item empty-item" style="color: var(--text-muted); cursor: default;">${emptyMessage}</div>`;
             return;
         }
 
-        names.forEach(name => {
+        names.forEach((name, index) => {
             const item = document.createElement('div');
             item.className = 'recent-item';
             item.textContent = name;
+            
+            // 高亮搜尋關鍵字
+            const inputValue = this.elements['task-input']?.value.trim();
+            if (inputValue) {
+                const highlightedText = this.highlightText(name, inputValue);
+                item.innerHTML = highlightedText;
+            }
+            
             item.addEventListener('click', () => {
-                const taskInput = this.elements['task-input'];
-                if (taskInput) {
-                    taskInput.value = name;
-                    taskInput.focus();
-                }
-                this.hideRecentTasksDropdown();
+                this.selectTask(name);
             });
+            
+            // 滑鼠懸停時更新選擇索引
+            item.addEventListener('mouseenter', () => {
+                this.selectedTaskIndex = index;
+                this.updateTaskSelection();
+            });
+            
             listElement.appendChild(item);
         });
+        
+        // 更新選擇狀態
+        this.updateTaskSelection();
+    }
+
+    // 選擇任務
+    selectTask(taskName) {
+        const taskInput = this.elements['task-input'];
+        if (taskInput) {
+            taskInput.value = taskName;
+            taskInput.focus();
+        }
+        this.hideRecentTasksDropdown();
+        this.resetSelection();
+    }
+
+    // 高亮文字中的搜尋關鍵字
+    highlightText(text, keyword) {
+        if (!keyword) return this.escapeHtml(text);
+        
+        const escapedText = this.escapeHtml(text);
+        const escapedKeyword = this.escapeHtml(keyword);
+        const regex = new RegExp(`(${escapedKeyword})`, 'gi');
+        
+        return escapedText.replace(regex, '<mark class="highlight">$1</mark>');
     }
 
     // 顯示最近任務下拉選單
