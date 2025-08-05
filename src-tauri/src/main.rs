@@ -493,6 +493,67 @@ fn start_tray_updater(app_handle: AppHandle) {
     });
 }
 
+// 設定全域快捷鍵（簡化版本）
+fn setup_global_shortcuts(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // 先註冊插件
+    app.handle().plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
+    
+    println!("✅ 全域快捷鍵插件已初始化");
+    println!("   快捷鍵將在 JavaScript 端註冊:");
+    println!("   Ctrl+Shift+T - 切換計時狀態（開始/停止）");
+    println!("   Ctrl+Shift+S - 顯示主視窗");
+    println!("   Ctrl+Shift+Q - 快速開始新任務");
+
+    Ok(())
+}
+
+// 處理切換計時狀態快捷鍵
+async fn handle_toggle_shortcut(app_handle: &AppHandle) {
+    if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+        if let Ok(mut app_state) = state.lock() {
+            let has_active = app_state.has_active_task();
+            
+            if has_active {
+                // 有進行中任務，停止它
+                if let Err(e) = app_state.stop_current_task() {
+                    eprintln!("快捷鍵停止任務失敗: {}", e);
+                } else {
+                    println!("✅ 透過快捷鍵停止任務");
+                    drop(app_state);
+                    update_tray_menu(app_handle);
+                }
+            } else {
+                // 沒有進行中任務，開始快速任務
+                let task_name = "快捷鍵任務".to_string();
+                if let Err(e) = app_state.start_task(task_name.clone()) {
+                    eprintln!("快捷鍵開始任務失敗: {}", e);
+                } else {
+                    println!("✅ 透過快捷鍵開始任務: {}", task_name);
+                    drop(app_state);
+                    update_tray_menu(app_handle);
+                }
+            }
+        }
+    }
+}
+
+// 處理快速開始任務快捷鍵
+async fn handle_quick_start_shortcut(app_handle: &AppHandle) {
+    if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+        if let Ok(mut app_state) = state.lock() {
+            // 總是開始新的快速任務（如果有進行中的會自動結束）
+            let task_name = "快速任務".to_string();
+            if let Err(e) = app_state.start_task(task_name.clone()) {
+                eprintln!("快速開始快捷鍵失敗: {}", e);
+            } else {
+                println!("✅ 透過快捷鍵快速開始任務: {}", task_name);
+                drop(app_state);
+                update_tray_menu(app_handle);
+            }
+        }
+    }
+}
+
 // 保留原有的 greet 命令（之後會移除）
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -595,6 +656,11 @@ fn main() {
             // 啟動托盤更新定時器
             let app_handle = app.handle().clone();
             start_tray_updater(app_handle);
+
+            // 註冊全域快捷鍵
+            if let Err(e) = setup_global_shortcuts(app) {
+                eprintln!("❌ 設定全域快捷鍵失敗: {}", e);
+            }
 
             Ok(())
         })
