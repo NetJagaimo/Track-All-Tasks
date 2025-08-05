@@ -20,12 +20,6 @@ export class ManualTaskEntry {
      * @returns {Promise<Object>} 補登結果
      */
     async addManualTask(params) {
-        if (this.isSubmitting) {
-            throw new Error('正在提交中，請稍候...');
-        }
-
-        this.isSubmitting = true;
-
         try {
             const manualParams = {
                 name: params.name,
@@ -44,8 +38,6 @@ export class ManualTaskEntry {
         } catch (error) {
             console.error('❌ 補登失敗：', error);
             throw error;
-        } finally {
-            this.isSubmitting = false;
         }
     }
 
@@ -55,6 +47,9 @@ export class ManualTaskEntry {
      * @param {Function} onCancel - 取消回調函數
      */
     showManualEntryForm(onSuccess, onCancel) {
+        // 重置提交狀態，避免之前的狀態影響
+        this.isSubmitting = false;
+        
         // 創建手動補登表單模態視窗
         const modal = document.createElement('div');
         modal.className = 'manual-entry-modal';
@@ -224,6 +219,8 @@ export class ManualTaskEntry {
         const closeModal = () => {
             document.body.removeChild(modal);
             this.currentForm = null;
+            // 重置提交狀態
+            this.isSubmitting = false;
         };
 
         // 計算並更新持續時間顯示
@@ -271,11 +268,19 @@ export class ManualTaskEntry {
                 const startTime = startTimeInput.value;
 
                 if (startDate && startTime) {
+                    // 確保使用本地時間計算，避免時區問題
                     const startDateTime = new Date(`${startDate}T${startTime}`);
                     const endDateTime = new Date(startDateTime.getTime() + minutes * 60 * 1000);
                     
-                    endDateInput.value = endDateTime.toISOString().split('T')[0];
-                    endTimeInput.value = endDateTime.toTimeString().slice(0, 5);
+                    // 使用本地時間格式，避免 UTC 轉換問題
+                    const year = endDateTime.getFullYear();
+                    const month = String(endDateTime.getMonth() + 1).padStart(2, '0');
+                    const day = String(endDateTime.getDate()).padStart(2, '0');
+                    const hours = String(endDateTime.getHours()).padStart(2, '0');
+                    const minutes_str = String(endDateTime.getMinutes()).padStart(2, '0');
+                    
+                    endDateInput.value = `${year}-${month}-${day}`;
+                    endTimeInput.value = `${hours}:${minutes_str}`;
                     
                     updateDurationDisplay();
                 }
@@ -318,8 +323,10 @@ export class ManualTaskEntry {
         // 表單提交
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            console.log('📝 表單提交事件觸發');
             
             if (this.isSubmitting) {
+                console.log('⚠️ 正在提交中，跳過');
                 return;
             }
 
@@ -329,6 +336,7 @@ export class ManualTaskEntry {
                 submitBtn.disabled = true;
                 submitBtn.innerHTML = '<span class="btn-text">新增中...</span>';
                 form.classList.add('form-loading');
+                console.log('📝 開始處理表單提交');
 
                 // 收集表單資料
                 const taskName = modal.querySelector('#manual-task-name').value.trim();
@@ -337,6 +345,10 @@ export class ManualTaskEntry {
                 const startTime = startTimeInput.value;
                 const endDate = endDateInput.value;
                 const endTime = endTimeInput.value;
+
+                console.log('📋 收集到的表單資料：', {
+                    taskName, taskDescription, startDate, startTime, endDate, endTime
+                });
 
                 // 驗證表單
                 if (!taskName) {
@@ -368,13 +380,17 @@ export class ManualTaskEntry {
                     description: taskDescription || undefined,
                 };
 
+                console.log('📤 準備提交的參數：', params);
+
                 // 執行補登
                 const result = await this.addManualTask(params);
+                console.log('✅ 補登成功：', result);
                 this.showSuccessMessage(result.message);
                 closeModal();
                 if (onSuccess) onSuccess(result);
 
             } catch (error) {
+                console.error('❌ 補登過程中發生錯誤：', error);
                 this.showErrorMessage(`補登失敗：${error.message || error}`);
             } finally {
                 // 重置提交狀態
@@ -382,6 +398,21 @@ export class ManualTaskEntry {
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = '<span class="btn-text">新增任務</span>';
                 form.classList.remove('form-loading');
+                console.log('📝 表單提交處理完成');
+            }
+        });
+
+        // 新增按鈕點擊事件（備用綁定）
+        submitBtn.addEventListener('click', (e) => {
+            console.log('🖱️ 新增任務按鈕被點擊');
+            // 如果按鈕不在表單內，手動觸發提交
+            if (submitBtn.type !== 'submit') {
+                e.preventDefault();
+                const submitEvent = new Event('submit', {
+                    bubbles: true,
+                    cancelable: true
+                });
+                form.dispatchEvent(submitEvent);
             }
         });
     }
