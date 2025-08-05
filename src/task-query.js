@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import taskEdit from './task-edit.js';
 
 /**
  * 任務查詢管理類
@@ -191,7 +192,10 @@ export class TaskQuery {
                                 ${endTime ? ' ~ ' + endTime.toLocaleString('zh-TW') : ' (進行中)'}
                             </div>
                         </div>
-                        <div class="record-id">${record.id}</div>
+                        <div class="record-actions">
+                            <button class="edit-task-btn" data-task-id="${record.id}" title="編輯任務">✏️</button>
+                            <div class="record-id">${record.id}</div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -209,6 +213,9 @@ export class TaskQuery {
 
         // 綁定分頁事件
         this.bindPaginationEvents(container, result);
+
+        // 綁定編輯按鈕事件
+        this.bindEditButtonEvents(container);
     }
 
     /**
@@ -369,6 +376,67 @@ export class TaskQuery {
             return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
         } else {
             return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+    }
+
+    /**
+     * 綁定編輯按鈕事件
+     * @param {HTMLElement} container - 容器元素
+     */
+    bindEditButtonEvents(container) {
+        const editBtns = container.querySelectorAll('.edit-task-btn');
+        editBtns.forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const taskId = e.target.dataset.taskId;
+                if (taskId) {
+                    await this.handleEditTask(taskId);
+                }
+            });
+        });
+    }
+
+    /**
+     * 處理編輯任務
+     * @param {string} taskId - 任務 ID
+     */
+    async handleEditTask(taskId) {
+        try {
+            // 獲取任務詳細資訊
+            const taskRecords = await invoke('get_task_history');
+            const task = taskRecords.find(t => t.id === taskId);
+            
+            if (!task) {
+                throw new Error('找不到指定的任務記錄');
+            }
+
+            // 顯示編輯表單
+            taskEdit.showEditForm(task, (action, result) => {
+                // 成功後重新載入當前查詢結果
+                console.log(`任務${action === 'edit' ? '編輯' : '刪除'}成功`);
+                
+                // 觸發統計資料更新
+                if (window.taskApp && window.taskApp.updateStatistics) {
+                    window.taskApp.updateStatistics();
+                }
+                
+                // 重新執行當前查詢
+                if (this.currentQuery) {
+                    this.queryTaskRecords(this.currentQuery).then(newResult => {
+                        const activeContainer = document.querySelector('.statistics-list.active .query-result-container');
+                        if (activeContainer) {
+                            const containerId = activeContainer.closest('[id]')?.id;
+                            if (containerId) {
+                                this.renderQueryResult(newResult, containerId);
+                            }
+                        }
+                    });
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ 載入任務資料失敗：', error);
+            alert(`載入任務資料失敗：${error.message || error}`);
         }
     }
 

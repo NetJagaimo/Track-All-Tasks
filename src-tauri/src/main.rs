@@ -66,6 +66,23 @@ pub struct ExportResult {
     pub message: String,                    // 結果訊息
 }
 
+// 任務編輯參數結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskEditParams {
+    pub task_id: String,                    // 任務 ID
+    pub new_name: Option<String>,           // 新任務名稱（可選）
+    pub new_start_time: Option<u64>,        // 新開始時間（可選）
+    pub new_end_time: Option<u64>,          // 新結束時間（可選）
+}
+
+// 任務編輯結果結構
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskEditResult {
+    pub success: bool,                      // 編輯是否成功
+    pub updated_task: Option<TaskRecord>,   // 更新後的任務記錄
+    pub message: String,                    // 結果訊息
+}
+
 // 任務統計資料結構
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSummary {
@@ -983,6 +1000,144 @@ impl AppState {
             field.to_string()
         }
     }
+
+    // 編輯任務記錄
+    pub fn edit_task(&mut self, params: &TaskEditParams) -> Result<TaskEditResult, String> {
+        // 尋找要編輯的任務
+        let task_index = self.task_history
+            .iter()
+            .position(|task| task.id == params.task_id);
+
+        if let Some(index) = task_index {
+            let mut task = self.task_history[index].clone();
+            let mut changes_made = false;
+            let mut change_summary = Vec::new();
+
+            // 更新任務名稱
+            if let Some(ref new_name) = params.new_name {
+                if new_name.trim().is_empty() {
+                    return Err("任務名稱不能為空".to_string());
+                }
+                if new_name.len() > 100 {
+                    return Err("任務名稱不能超過 100 個字元".to_string());
+                }
+                let old_name = task.name.clone();
+                task.name = new_name.trim().to_string();
+                change_summary.push(format!("名稱: {} → {}", old_name, task.name));
+                changes_made = true;
+            }
+
+            // 更新開始時間
+            if let Some(new_start_time) = params.new_start_time {
+                let old_start_time = task.start_time;
+                task.start_time = new_start_time;
+                change_summary.push(format!(
+                    "開始時間: {} → {}", 
+                    self.timestamp_to_string(old_start_time),
+                    self.timestamp_to_string(new_start_time)
+                ));
+                changes_made = true;
+
+                // 如果有結束時間，重新計算持續時間
+                if let Some(end_time) = task.end_time {
+                    if new_start_time >= end_time {
+                        return Err("開始時間不能晚於或等於結束時間".to_string());
+                    }
+                    task.duration_seconds = Some(end_time - new_start_time);
+                } else if task.is_completed {
+                    // 如果任務已完成但沒有結束時間，這是個異常情況，修正它
+                    task.end_time = Some(new_start_time + task.duration_seconds.unwrap_or(0));
+                    task.duration_seconds = Some(task.end_time.unwrap() - new_start_time);
+                }
+            }
+
+            // 更新結束時間
+            if let Some(new_end_time) = params.new_end_time {
+                if new_end_time <= task.start_time {
+                    return Err("結束時間必須晚於開始時間".to_string());
+                }
+                
+                let old_end_time = task.end_time;
+                task.end_time = Some(new_end_time);
+                task.is_completed = true;
+                task.duration_seconds = Some(new_end_time - task.start_time);
+                
+                let old_time_str = old_end_time
+                    .map(|t| self.timestamp_to_string(t))
+                    .unwrap_or_else(|| "無".to_string());
+                change_summary.push(format!(
+                    "結束時間: {} → {}", 
+                    old_time_str,
+                    self.timestamp_to_string(new_end_time)
+                ));
+                changes_made = true;
+            }
+
+            if !changes_made {
+                return Err("沒有提供任何要更新的欄位".to_string());
+            }
+
+            // 驗證最終的任務記錄
+            if let Some(end_time) = task.end_time {
+                if task.start_time >= end_time {
+                    return Err("任務的開始時間不能晚於或等於結束時間".to_string());
+                }
+            }
+
+            // 更新任務記錄
+            self.task_history[index] = task.clone();
+
+            // 儲存更改
+            if let Err(e) = self.save_to_file() {
+                return Err(format!("儲存變更失敗: {}", e));
+            }
+
+            let message = format!("成功更新任務 - {}", change_summary.join(", "));
+
+            Ok(TaskEditResult {
+                success: true,
+                updated_task: Some(task),
+                message,
+            })
+        } else {
+            Err("找不到指定的任務記錄".to_string())
+        }
+    }
+
+    // 刪除任務記錄
+    pub fn delete_task(&mut self, task_id: &str) -> Result<String, String> {
+        let task_index = self.task_history
+            .iter()
+            .position(|task| task.id == task_id);
+
+        if let Some(index) = task_index {
+            let removed_task = self.task_history.remove(index);
+            
+            // 儲存更改
+            if let Err(e) = self.save_to_file() {
+                // 如果儲存失敗，還原刪除操作
+                self.task_history.insert(index, removed_task);
+                return Err(format!("儲存變更失敗: {}", e));
+            }
+
+            Ok(format!("成功刪除任務「{}」", removed_task.name))
+        } else {
+            Err("找不到指定的任務記錄".to_string())
+        }
+    }
+
+    // 驗證時間戳是否合理
+    fn validate_timestamp(&self, timestamp: u64) -> Result<(), String> {
+        // 檢查時間戳是否在合理範圍內（2020年到2050年）
+        let min_timestamp = 1577836800; // 2020-01-01 00:00:00 UTC
+        let max_timestamp = 2524608000; // 2050-01-01 00:00:00 UTC
+        
+        if timestamp < min_timestamp || timestamp > max_timestamp {
+            return Err("時間戳超出合理範圍（2020-2050年）".to_string());
+        }
+        
+        Ok(())
+    }
 }
 
 // Tauri 命令：開始任務
@@ -1112,6 +1267,20 @@ fn get_date_stats(start_date: Option<String>, end_date: Option<String>, state: t
 fn export_data(params: ExportParams, state: tauri::State<Mutex<AppState>>) -> Result<ExportResult, String> {
     let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
     app_state.export_data(&params)
+}
+
+// Tauri 命令：編輯任務
+#[tauri::command]
+fn edit_task(params: TaskEditParams, state: tauri::State<Mutex<AppState>>) -> Result<TaskEditResult, String> {
+    let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    app_state.edit_task(&params)
+}
+
+// Tauri 命令：刪除任務
+#[tauri::command]
+fn delete_task(task_id: String, state: tauri::State<Mutex<AppState>>) -> Result<String, String> {
+    let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+    app_state.delete_task(&task_id)
 }
 
 // 更新托盤標題（不更新選單以避免選單消失）
@@ -1368,6 +1537,8 @@ fn main() {
             query_task_records,
             get_date_stats,
             export_data,
+            edit_task,
+            delete_task,
             greet
         ])
         .run(tauri::generate_context!())
