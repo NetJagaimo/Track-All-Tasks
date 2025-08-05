@@ -4,13 +4,14 @@
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    AppHandle, Manager,
 };
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::thread;
 
 // 任務記錄資料結構
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +322,22 @@ impl AppState {
     pub fn get_current_task_id(&self) -> Option<String> {
         self.current_task.as_ref().map(|task| task.id.clone())
     }
+
+    // 生成托盤標題
+    pub fn get_tray_title(&self) -> String {
+        match &self.current_task {
+            Some(task) => {
+                let duration = task.get_duration_formatted();
+                let task_name = if task.name.len() > 20 {
+                    format!("{}...", &task.name[..17])
+                } else {
+                    task.name.clone()
+                };
+                format!("⏰ {} - {}", task_name, duration)
+            }
+            None => "Track All Tasks - 待機中".to_string(),
+        }
+    }
 }
 
 // Tauri 命令：開始任務
@@ -394,6 +411,30 @@ fn get_current_timestamp() -> u64 {
         .as_secs()
 }
 
+// 更新托盤標題
+fn update_tray_title(app_handle: &AppHandle) {
+    if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
+        if let Ok(app_state) = state.lock() {
+            let title = app_state.get_tray_title();
+            
+            // 嘗試取得托盤並更新標題
+            if let Some(tray) = app_handle.tray_by_id("main") {
+                let _ = tray.set_title(Some(&title));
+            }
+        }
+    }
+}
+
+// 啟動托盤更新定時器
+fn start_tray_updater(app_handle: AppHandle) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            update_tray_title(&app_handle);
+        }
+    });
+}
+
 // 保留原有的 greet 命令（之後會移除）
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -406,6 +447,7 @@ fn main() {
         .setup(|app| {
             // 初始化應用程式狀態
             let app_state = AppState::load_from_file();
+            let initial_title = app_state.get_tray_title();
             app.manage(Mutex::new(app_state));
 
             // 創建系統托盤菜單
@@ -413,9 +455,9 @@ fn main() {
             let menu = MenuBuilder::new(app).items(&[&quit]).build()?;
 
             // 創建系統托盤圖標
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")  // 設置托盤 ID
                 .menu(&menu)
-                .title("Track All Tasks - Menu Bar Display")
+                .title(&initial_title)  // 使用動態標題
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "quit" => {
                         // 在退出前確保資料已儲存
@@ -446,6 +488,10 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // 啟動托盤更新定時器
+            let app_handle = app.handle().clone();
+            start_tray_updater(app_handle);
 
             Ok(())
         })
