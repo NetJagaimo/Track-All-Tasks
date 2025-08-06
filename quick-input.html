@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>快速任務輸入</title>
+    <style>
+        :root {
+            --background-primary: #ffffff;
+            --background-secondary: #f5f5f5;
+            --text-primary: #333333;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+            --border-color: #e0e0e0;
+            --primary-color: #3b82f6;
+            --primary-hover: #2563eb;
+            --hover-bg: #f0f0f0;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --background-primary: #1a1a1a;
+                --background-secondary: #2a2a2a;
+                --text-primary: #ffffff;
+                --text-secondary: #cccccc;
+                --text-muted: #888888;
+                --border-color: #404040;
+                --hover-bg: #3a3a3a;
+                --shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--background-primary);
+            color: var(--text-primary);
+            overflow: hidden;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .quick-input-container {
+            padding: 16px;
+            background: var(--background-primary);
+            border-radius: 8px;
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-wrapper {
+            position: relative;
+            margin-bottom: 8px;
+        }
+
+        #task-input {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 16px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--background-primary);
+            color: var(--text-primary);
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+
+        #task-input:focus {
+            border-color: var(--primary-color);
+        }
+
+        #task-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .suggestions-list {
+            flex: 1;
+            overflow-y: auto;
+            margin: 0 -16px;
+            padding: 0 16px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-color) transparent;
+        }
+
+        .suggestions-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .suggestions-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .suggestions-list::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 3px;
+        }
+
+        .suggestion-item {
+            padding: 10px 12px;
+            margin: 2px 0;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 14px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .suggestion-item:hover {
+            background: var(--hover-bg);
+            color: var(--text-primary);
+        }
+
+        .suggestion-item.selected {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .suggestion-item mark {
+            background: transparent;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .suggestion-item.selected mark {
+            color: white;
+        }
+
+        .empty-state {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .shortcuts-hint {
+            padding: 8px 16px;
+            margin: 0 -16px;
+            background: var(--background-secondary);
+            border-top: 1px solid var(--border-color);
+            font-size: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+        }
+
+        .shortcut {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .key {
+            background: var(--background-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: monospace;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="quick-input-container">
+        <div class="input-wrapper">
+            <input 
+                type="text" 
+                id="task-input" 
+                placeholder="輸入任務名稱..." 
+                autocomplete="off"
+                autofocus
+            />
+        </div>
+        
+        <div class="suggestions-list" id="suggestions-list">
+            <div class="empty-state">載入中...</div>
+        </div>
+        
+        <div class="shortcuts-hint">
+            <span class="shortcut"><span class="key">Enter</span> 開始</span>
+            <span class="shortcut"><span class="key">Esc</span> 取消</span>
+            <span class="shortcut"><span class="key">↑↓</span> 選擇</span>
+        </div>
+    </div>
+
+    <script type="module">
+        import { invoke } from "@tauri-apps/api/core";
+        import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+
+        class QuickTaskInput {
+            constructor() {
+                this.window = getCurrentWebviewWindow();
+                this.input = document.getElementById('task-input');
+                this.suggestionsList = document.getElementById('suggestions-list');
+                this.recentTasks = [];
+                this.filteredTasks = [];
+                this.selectedIndex = -1;
+                
+                this.init();
+            }
+
+            async init() {
+                // 載入最近任務
+                await this.loadRecentTasks();
+                
+                // 綁定事件
+                this.bindEvents();
+                
+                // 確保輸入框獲得焦點
+                this.input.focus();
+            }
+
+            async loadRecentTasks() {
+                try {
+                    this.recentTasks = await invoke('get_recent_task_names');
+                    this.filteredTasks = [...this.recentTasks];
+                    this.renderSuggestions();
+                } catch (error) {
+                    console.error('載入最近任務失敗:', error);
+                    this.recentTasks = [];
+                    this.filteredTasks = [];
+                    this.renderSuggestions();
+                }
+            }
+
+            bindEvents() {
+                // 輸入事件
+                this.input.addEventListener('input', (e) => {
+                    this.filterTasks(e.target.value);
+                });
+
+                // 鍵盤事件（綁定到輸入框）
+                this.input.addEventListener('keydown', (e) => {
+                    this.handleKeydown(e);
+                });
+
+                // 全域鍵盤事件（綁定到整個文檔，確保 ESC 鍵在任何地方都能工作）
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.close();
+                    }
+                });
+
+                // 建議項目點擊
+                this.suggestionsList.addEventListener('click', (e) => {
+                    const item = e.target.closest('.suggestion-item');
+                    if (item) {
+                        const index = parseInt(item.dataset.index);
+                        this.selectTask(index);
+                    }
+                });
+
+                // 建議項目懸停
+                this.suggestionsList.addEventListener('mouseover', (e) => {
+                    const item = e.target.closest('.suggestion-item');
+                    if (item) {
+                        const index = parseInt(item.dataset.index);
+                        this.selectedIndex = index;
+                        this.updateSelection();
+                    }
+                });
+            }
+
+            filterTasks(query) {
+                if (!query.trim()) {
+                    this.filteredTasks = [...this.recentTasks];
+                } else {
+                    this.filteredTasks = this.recentTasks.filter(task =>
+                        task.toLowerCase().includes(query.toLowerCase())
+                    );
+                }
+                this.selectedIndex = -1;
+                this.renderSuggestions();
+            }
+
+            renderSuggestions() {
+                if (this.filteredTasks.length === 0) {
+                    const query = this.input.value.trim();
+                    this.suggestionsList.innerHTML = `
+                        <div class="empty-state">
+                            ${query ? '沒有找到符合的任務' : '尚無最近任務'}
+                        </div>
+                    `;
+                    return;
+                }
+
+                this.suggestionsList.innerHTML = this.filteredTasks.map((task, index) => {
+                    const highlighted = this.highlightMatch(task, this.input.value);
+                    return `
+                        <div class="suggestion-item ${index === this.selectedIndex ? 'selected' : ''}" 
+                             data-index="${index}">
+                            ${highlighted}
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            highlightMatch(text, query) {
+                if (!query.trim()) return this.escapeHtml(text);
+                
+                const escaped = this.escapeHtml(text);
+                const regex = new RegExp(`(${this.escapeRegExp(query)})`, 'gi');
+                return escaped.replace(regex, '<mark>$1</mark>');
+            }
+
+            updateSelection() {
+                const items = this.suggestionsList.querySelectorAll('.suggestion-item');
+                items.forEach((item, index) => {
+                    if (index === this.selectedIndex) {
+                        item.classList.add('selected');
+                        item.scrollIntoView({ block: 'nearest' });
+                    } else {
+                        item.classList.remove('selected');
+                    }
+                });
+            }
+
+            async handleKeydown(e) {
+                switch (e.key) {
+                    case 'Enter':
+                        e.preventDefault();
+                        if (this.selectedIndex >= 0) {
+                            this.selectTask(this.selectedIndex);
+                        } else {
+                            await this.startTask(this.input.value.trim());
+                        }
+                        break;
+
+                    case 'Escape':
+                        e.preventDefault();
+                        e.stopPropagation();
+                        await this.close();
+                        break;
+
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        this.selectedIndex = Math.min(
+                            this.selectedIndex + 1,
+                            this.filteredTasks.length - 1
+                        );
+                        this.updateSelection();
+                        break;
+
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        this.selectedIndex = Math.max(this.selectedIndex - 1, -1);
+                        this.updateSelection();
+                        break;
+
+                    case 'Tab':
+                        if (this.filteredTasks.length > 0 && this.selectedIndex === -1) {
+                            e.preventDefault();
+                            this.selectTask(0);
+                        }
+                        break;
+                }
+            }
+
+            selectTask(index) {
+                if (index >= 0 && index < this.filteredTasks.length) {
+                    const taskName = this.filteredTasks[index];
+                    this.input.value = taskName;
+                    this.selectedIndex = -1;
+                    this.filterTasks(taskName);
+                    this.input.focus();
+                }
+            }
+
+            async startTask(taskName) {
+                if (!taskName) {
+                    return;
+                }
+
+                try {
+                    await invoke('start_task_from_quick_input', { name: taskName });
+                    await this.close();
+                } catch (error) {
+                    console.error('開始任務失敗:', error);
+                }
+            }
+
+            async close() {
+                try {
+                    await this.window.close();
+                } catch (error) {
+                    console.error('Failed to close window:', error);
+                }
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            escapeRegExp(string) {
+                return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+        }
+
+        // 初始化
+        new QuickTaskInput();
+    </script>
+</body>
+</html>

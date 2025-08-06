@@ -4,8 +4,9 @@
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    AppHandle, Manager, WebviewWindowBuilder, WebviewUrl, LogicalPosition, LogicalSize,
 };
+use tauri_plugin_positioner::{Position, WindowExt};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::fs;
@@ -147,6 +148,7 @@ impl TaskSummary {
         TaskRecord::format_duration(self.average_duration_seconds)
     }
 }
+
 
 // 任務記錄資料結構
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1404,6 +1406,35 @@ fn add_manual_task(params: ManualTaskParams, state: tauri::State<Mutex<AppState>
     app_state.add_manual_task(&params)
 }
 
+// Tauri 命令：創建快速輸入窗口
+#[tauri::command]
+fn create_quick_input_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    create_quick_input_window_impl(&app_handle)
+        .map_err(|e| format!("創建快速輸入窗口失敗: {}", e))
+}
+
+// Tauri 命令：從快速輸入窗口開始任務
+#[tauri::command]
+async fn start_task_from_quick_input(name: String, app_handle: tauri::AppHandle, state: tauri::State<'_, Mutex<AppState>>) -> Result<(), String> {
+    // 開始任務
+    {
+        let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
+        app_state.start_task(name.clone())?;
+    }
+    
+    // 更新托盤
+    update_tray_menu(&app_handle);
+    
+    // 關閉快速輸入窗口
+    if let Some(quick_window) = app_handle.get_webview_window("quick-input") {
+        let _ = quick_window.close();
+    }
+    
+    // 不顯示主窗口，讓用戶可以繼續工作
+    
+    Ok(())
+}
+
 // 更新托盤標題（不更新選單以避免選單消失）
 fn update_tray_title(app_handle: &AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
@@ -1484,6 +1515,39 @@ fn setup_global_shortcuts(app: &mut tauri::App) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+// 創建快速輸入窗口的實際實現
+fn create_quick_input_window_impl(app_handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    // 檢查是否已存在快速輸入窗口
+    if let Some(existing_window) = app_handle.get_webview_window("quick-input") {
+        let _ = existing_window.close();
+    }
+
+    // 創建快速輸入窗口（先不設置位置）
+    let quick_input = WebviewWindowBuilder::new(
+        app_handle,
+        "quick-input",
+        WebviewUrl::App("quick-input.html".into())
+    )
+    .title("快速任務輸入")
+    .inner_size(300.0, 400.0)
+    .resizable(false)
+    .minimizable(false)
+    .maximizable(false)
+    .decorations(false) // 無邊框窗口
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(true)
+    .build()?;
+
+    // 將窗口定位到螢幕正中央
+    let _ = quick_input.move_window(Position::Center);
+
+    // 自動獲得焦點
+    let _ = quick_input.set_focus();
+
+    Ok(())
+}
+
 // 處理切換計時狀態快捷鍵
 async fn handle_toggle_shortcut(app_handle: &AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
@@ -1540,6 +1604,7 @@ fn greet(name: &str) -> String {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_positioner::init())
         .setup(|app| {
             // 初始化應用程式狀態
             let app_state = AppState::load_from_file();
@@ -1615,13 +1680,17 @@ fn main() {
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
+                    let app = tray.app_handle();
+                    
+                    // 通知 positioner 插件 tray 事件，讓它知道 tray 的位置
+                    tauri_plugin_positioner::on_tray_event(app, &event);
+                    
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: _,
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -1661,6 +1730,8 @@ fn main() {
             edit_task,
             delete_task,
             add_manual_task,
+            create_quick_input_window,
+            start_task_from_quick_input,
             greet
         ])
         .run(tauri::generate_context!())
