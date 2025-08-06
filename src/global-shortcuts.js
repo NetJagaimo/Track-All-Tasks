@@ -116,14 +116,9 @@ export class GlobalShortcutManager {
         try {
             console.log("⚡ 處理快速開始任務快捷鍵");
             
-            const taskName = "快速任務";
-            await invoke('start_task', { name: taskName });
-            console.log(`▶️ 透過快捷鍵快速開始任務: ${taskName}`);
-            
-            // 更新 UI（如果應用程式實例存在）
-            if (window.taskApp) {
-                await window.taskApp.updateDisplay();
-            }
+            // 創建快速輸入窗口
+            await invoke('create_quick_input_window');
+            console.log("📝 快速輸入窗口已創建");
             
         } catch (error) {
             console.error("❌ 快速開始任務失敗:", error);
