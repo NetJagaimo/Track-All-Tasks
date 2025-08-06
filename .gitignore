@@ -155,4 +155,5 @@ build/
 
 # Temporary files
 *.tmp
-*.temp
+*.temp# Force ignore all target contents
+src-tauri/target/**
