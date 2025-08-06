@@ -19,9 +19,9 @@ export class GlobalShortcutManager {
                 await this.handleToggleTimer();
             });
 
-            // 註冊快捷鍵：Ctrl+Shift+S - 顯示主視窗
+            // 註冊快捷鍵：Ctrl+Shift+S - 切換主視窗顯示/隱藏
             await this.registerShortcut('Ctrl+Shift+S', async () => {
-                await this.handleShowWindow();
+                await this.handleToggleWindow();
             });
 
             // 註冊快捷鍵：Ctrl+Shift+Q - 快速開始任務
@@ -31,7 +31,7 @@ export class GlobalShortcutManager {
 
             console.log("✅ 全域快捷鍵註冊完成:");
             console.log("   Ctrl+Shift+T - 切換計時狀態（開始/停止）");
-            console.log("   Ctrl+Shift+S - 顯示主視窗");
+            console.log("   Ctrl+Shift+S - 切換主視窗顯示/隱藏");
             console.log("   Ctrl+Shift+Q - 快速開始新任務");
 
         } catch (error) {
@@ -86,28 +86,36 @@ export class GlobalShortcutManager {
         }
     }
 
-    // 處理顯示主視窗
-    async handleShowWindow() {
+    // 處理切換主視窗顯示/隱藏
+    async handleToggleWindow() {
         try {
-            console.log("📱 處理顯示主視窗快捷鍵");
+            console.log("📱 處理切換主視窗快捷鍵");
             
-            await this.window.show();
-            await this.window.setFocus();
+            const isVisible = await this.window.isVisible();
             
-            // 短暫置頂確保獲得焦點
-            await this.window.setAlwaysOnTop(true);
-            setTimeout(async () => {
-                try {
-                    await this.window.setAlwaysOnTop(false);
-                } catch (e) {
-                    console.warn("無法取消置頂:", e);
-                }
-            }, 100);
-            
-            console.log("✅ 主視窗已顯示並獲得焦點");
+            if (isVisible) {
+                // 如果視窗可見，隱藏它
+                await this.window.hide();
+                console.log("🙈 主視窗已隱藏");
+            } else {
+                // 如果視窗隱藏，顯示並聚焦它
+                await this.window.show();
+                await this.window.setFocus();
+                
+                // 短暂置頂確保獲得焦點
+                await this.window.setAlwaysOnTop(true);
+                setTimeout(async () => {
+                    try {
+                        await this.window.setAlwaysOnTop(false);
+                    } catch (e) {
+                        console.warn("無法取消置頂:", e);
+                    }
+                }, 100);
+                console.log("👁️ 主視窗已顯示並獲得焦點");
+            }
             
         } catch (error) {
-            console.error("❌ 顯示主視窗失敗:", error);
+            console.error("❌ 切換主視窗失敗:", error);
         }
     }
 

@@ -395,7 +395,16 @@
 
             async close() {
                 try {
+                    // 關閉快速輸入視窗
                     await this.window.close();
+                    
+                    // 確保主視窗不會顯示
+                    try {
+                        await invoke('hide_main_window');
+                    } catch (hideError) {
+                        // 忽略隱藏主視窗的錯誤（可能主視窗本來就是隱藏的）
+                        console.debug('Hide main window error (可忽略):', hideError);
+                    }
                 } catch (error) {
                     console.error('Failed to close window:', error);
                 }

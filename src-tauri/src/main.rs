@@ -1406,6 +1406,15 @@ fn add_manual_task(params: ManualTaskParams, state: tauri::State<Mutex<AppState>
     app_state.add_manual_task(&params)
 }
 
+// Tauri 命令：隱藏主視窗
+#[tauri::command]
+fn hide_main_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        main_window.hide().map_err(|e| format!("隱藏主視窗失敗: {}", e))?;
+    }
+    Ok(())
+}
+
 // Tauri 命令：創建快速輸入窗口
 #[tauri::command]
 fn create_quick_input_window(app_handle: tauri::AppHandle) -> Result<(), String> {
@@ -1430,7 +1439,10 @@ async fn start_task_from_quick_input(name: String, app_handle: tauri::AppHandle,
         let _ = quick_window.close();
     }
     
-    // 不顯示主窗口，讓用戶可以繼續工作
+    // 確保主視窗不會顯示
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        let _ = main_window.hide();
+    }
     
     Ok(())
 }
@@ -1659,21 +1671,11 @@ fn main() {
                             }
                         }
                         "quick_start" => {
-                            // 快速開始計時（預設任務名稱）
-                            if let Some(state) = app.try_state::<Mutex<AppState>>() {
-                                if let Ok(mut app_state) = state.lock() {
-                                    let task_name = "快速任務".to_string();
-                                    if let Err(e) = app_state.start_task(task_name.clone()) {
-                                        eprintln!("托盤開始任務失敗: {}", e);
-                                    } else {
-                                        println!("✅ 透過托盤開始任務: {}", task_name);
-                                        // 狀態改變後更新選單
-                                        drop(app_state); // 釋放鎖定
-                                        update_tray_menu(app);
-                                    }
-                                } else {
-                                    eprintln!("❌ 無法取得應用程式狀態鎖定");
-                                }
+                            // 打開快速輸入視窗
+                            if let Err(e) = create_quick_input_window_impl(app) {
+                                eprintln!("❌ 透過托盤創建快速輸入視窗失敗: {}", e);
+                            } else {
+                                println!("✅ 透過托盤打開快速輸入視窗");
                             }
                         }
                         _ => {}
@@ -1691,9 +1693,12 @@ fn main() {
                         ..
                     } = event
                     {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                        // 只有在沒有快速輸入視窗時才顯示主視窗
+                        if app.get_webview_window("quick-input").is_none() {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
                     }
                 })
@@ -1732,6 +1737,7 @@ fn main() {
             add_manual_task,
             create_quick_input_window,
             start_task_from_quick_input,
+            hide_main_window,
             greet
         ])
         .run(tauri::generate_context!())

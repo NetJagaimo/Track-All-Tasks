@@ -16,7 +16,8 @@
         "width": 800,
         "height": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
@@ -30,6 +31,7 @@
             "core:window:allow-show",
             "core:window:allow-hide",
             "core:window:allow-set-focus",
+            "core:window:allow-is-visible",
             "global-shortcut:allow-register",
             "global-shortcut:allow-unregister",
             "global-shortcut:allow-is-registered"

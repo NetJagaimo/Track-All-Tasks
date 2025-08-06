@@ -81,6 +81,23 @@ class TaskTrackerApp {
 
     // 綁定事件監聽器
     bindEventListeners() {
+        // 窗口關閉事件處理 (Cmd+W / Ctrl+W)
+        document.addEventListener('keydown', async (e) => {
+            // 檢查是否是 Cmd+W (macOS) 或 Ctrl+W (Windows/Linux)
+            if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+                e.preventDefault();
+                try {
+                    // 隱藏窗口而不是關閉應用程序
+                    const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+                    const window = getCurrentWebviewWindow();
+                    await window.hide();
+                    console.log("🙈 主視窗已隱藏 (Cmd+W / Ctrl+W)");
+                } catch (error) {
+                    console.error("❌ 隱藏視窗失敗:", error);
+                }
+            }
+        });
+
         // 任務控制按鈕
         this.elements['start-btn']?.addEventListener('click', this.handleStartTask);
         this.elements['stop-btn']?.addEventListener('click', this.handleStopTask);
