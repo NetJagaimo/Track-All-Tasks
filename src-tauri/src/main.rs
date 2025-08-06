@@ -567,8 +567,9 @@ impl AppState {
         match &self.current_task {
             Some(task) => {
                 let duration = task.get_duration_formatted();
-                let task_name = if task.name.len() > 20 {
-                    format!("{}...", &task.name[..17])
+                let task_name = if task.name.chars().count() > 20 {
+                    let truncated: String = task.name.chars().take(17).collect();
+                    format!("{}...", truncated)
                 } else {
                     task.name.clone()
                 };
@@ -1274,16 +1275,23 @@ fn start_task(name: String, state: tauri::State<Mutex<AppState>>, app_handle: Ap
 // Tauri 命令：停止目前任務
 #[tauri::command]
 fn stop_task(state: tauri::State<Mutex<AppState>>, app_handle: AppHandle) -> Result<(), String> {
-    let mut app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
-    let result = app_state.stop_current_task();
-    
-    // 狀態改變後更新托盤選單
-    if result.is_ok() {
-        drop(app_state); // 釋放鎖定
-        update_tray_menu(&app_handle);
+    match state.try_lock() {
+        Ok(mut app_state) => {
+            let result = app_state.stop_current_task();
+            
+            // 狀態改變後更新托盤選單
+            if result.is_ok() {
+                drop(app_state); // 釋放鎖定
+                update_tray_menu(&app_handle);
+            }
+            
+            result
+        },
+        Err(e) => {
+            eprintln!("無法鎖定應用程式狀態 (stop_task): {:?}", e);
+            Err("應用程式忙碌中，請稍後再試".to_string())
+        }
     }
-    
-    result
 }
 
 // Tauri 命令：取得目前狀態
@@ -1296,8 +1304,14 @@ fn get_current_status(state: tauri::State<Mutex<AppState>>) -> Result<(bool, Opt
 // Tauri 命令：取得最近任務名稱
 #[tauri::command]
 fn get_recent_task_names(state: tauri::State<Mutex<AppState>>) -> Result<Vec<String>, String> {
-    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
-    Ok(app_state.recent_task_names.clone())
+    match state.try_lock() {
+        Ok(app_state) => Ok(app_state.recent_task_names.clone()),
+        Err(e) => {
+            eprintln!("無法鎖定應用程式狀態 (get_recent_task_names): {:?}", e);
+            // 返回空列表
+            Ok(Vec::new())
+        }
+    }
 }
 
 // Tauri 命令：取得任務歷史
@@ -1310,15 +1324,27 @@ fn get_task_history(state: tauri::State<Mutex<AppState>>) -> Result<Vec<TaskReco
 // Tauri 命令：取得格式化的目前狀態
 #[tauri::command]
 fn get_current_status_formatted(state: tauri::State<Mutex<AppState>>) -> Result<(bool, Option<String>, String), String> {
-    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
-    Ok(app_state.get_current_status_formatted())
+    match state.try_lock() {
+        Ok(app_state) => Ok(app_state.get_current_status_formatted()),
+        Err(e) => {
+            eprintln!("無法鎖定應用程式狀態 (get_current_status_formatted): {:?}", e);
+            // 返回預設值而不是錯誤，避免 UI 完全失效
+            Ok((false, None, "00:00".to_string()))
+        }
+    }
 }
 
 // Tauri 命令：取得今日統計
 #[tauri::command]
 fn get_today_stats(state: tauri::State<Mutex<AppState>>) -> Result<(u64, u64, String), String> {
-    let app_state = state.lock().map_err(|_| "無法取得應用程式狀態")?;
-    Ok(app_state.get_today_stats())
+    match state.try_lock() {
+        Ok(app_state) => Ok(app_state.get_today_stats()),
+        Err(e) => {
+            eprintln!("無法鎖定應用程式狀態 (get_today_stats): {:?}", e);
+            // 返回預設值
+            Ok((0, 0, "00:00".to_string()))
+        }
+    }
 }
 
 // Tauri 命令：檢查是否有進行中的任務
@@ -1450,12 +1476,17 @@ async fn start_task_from_quick_input(name: String, app_handle: tauri::AppHandle,
 // 更新托盤標題（不更新選單以避免選單消失）
 fn update_tray_title(app_handle: &AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
-        if let Ok(app_state) = state.lock() {
-            let title = app_state.get_tray_title();
-            
-            // 只更新標題，不重建選單
-            if let Some(tray) = app_handle.tray_by_id("main") {
-                let _ = tray.set_title(Some(&title));
+        match state.try_lock() {
+            Ok(app_state) => {
+                let title = app_state.get_tray_title();
+                
+                // 只更新標題，不重建選單
+                if let Some(tray) = app_handle.tray_by_id("main") {
+                    let _ = tray.set_title(Some(&title));
+                }
+            }
+            Err(_) => {
+                // 如果無法鎖定，跳過這次更新
             }
         }
     }
@@ -1464,14 +1495,19 @@ fn update_tray_title(app_handle: &AppHandle) {
 // 更新托盤選單（僅在狀態改變時調用）
 fn update_tray_menu(app_handle: &AppHandle) {
     if let Some(state) = app_handle.try_state::<Mutex<AppState>>() {
-        if let Ok(app_state) = state.lock() {
-            let has_active = app_state.has_active_task();
-            
-            // 重建選單
-            if let Some(tray) = app_handle.tray_by_id("main") {
-                if let Ok(new_menu) = build_tray_menu(app_handle, has_active) {
-                    let _ = tray.set_menu(Some(new_menu));
+        match state.try_lock() {
+            Ok(app_state) => {
+                let has_active = app_state.has_active_task();
+                
+                // 重建選單
+                if let Some(tray) = app_handle.tray_by_id("main") {
+                    if let Ok(new_menu) = build_tray_menu(app_handle, has_active) {
+                        let _ = tray.set_menu(Some(new_menu));
+                    }
                 }
+            }
+            Err(_) => {
+                // 如果無法鎖定，跳過這次更新
             }
         }
     }
