@@ -20,10 +20,12 @@ struct MenuBarLabel: View {
     @ViewBuilder
     private var content: some View {
         if controller.isRunning {
-            // 用 systemImage label，讓選單列同時顯示圖示與文字。
+            // 計時中：碼錶圖示 + 任務名前 3 字 + 秒級時長。
+            // 用 SF Symbol：MenuBarExtra 會自動把它對齊到選單列基準線（自訂點陣圖難喬）。
             Label("\(Formatting.prefix3(controller.currentTaskName)) \(controller.elapsedClock)",
                   systemImage: "stopwatch.fill")
         } else {
+            // 閒置：只顯示圖示。
             Image(systemName: "stopwatch")
         }
     }
