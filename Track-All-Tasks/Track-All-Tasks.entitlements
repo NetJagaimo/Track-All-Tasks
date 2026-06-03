@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 個人工具：不開 App Sandbox（全域快捷鍵走 Carbon、資料寫 Application Support）。 -->
+    <!-- 硬化執行階段（Hardened Runtime）由 build setting 開啟，這裡保持空白即可。 -->
+</dict>
+</plist>

@@ -1,0 +1,44 @@
+name: Track-All-Tasks
+options:
+  bundleIdPrefix: com.pingyang
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.0.0
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 1.10.0
+
+targets:
+  Track-All-Tasks:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Track-All-Tasks
+    dependencies:
+      - package: GRDB
+        product: GRDB
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
+    info:
+      path: Track-All-Tasks/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleName: Track-All-Tasks
+        CFBundleDisplayName: 任務工時
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pingyang.Track-All-Tasks
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Track-All-Tasks/Track-All-Tasks.entitlements
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
