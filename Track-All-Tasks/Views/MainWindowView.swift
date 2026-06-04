@@ -27,6 +27,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 struct MainWindowView: View {
     let container: AppContainer
     @State private var selection: SidebarSection = .active
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         NavigationSplitView {
@@ -39,6 +40,8 @@ struct MainWindowView: View {
             detail
                 .frame(minWidth: 520, minHeight: 420)
         }
+        // 讓 AppKit 端（popover「前往主視窗」、Dock 重開）能重新打開這個視窗。
+        .onAppear { container.openMainWindow = { openWindow(id: "main") } }
     }
 
     @ViewBuilder

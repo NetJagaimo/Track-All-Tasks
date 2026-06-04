@@ -1,53 +1,115 @@
 import SwiftUI
+import AppKit
 
-/// 選單列點開後的 popover 面板（SPEC §4）。輕量操作：狀態、開始/停止、任務輸入與快選、前往主視窗。
+/// 選單列點開後的 popover 面板（SPEC §4，方案 B 版）。
+/// 版面：最上面輸入框 + 開始/停止切換鈕；底下列出最近 5 個執行過的任務。
+/// 計時中：所有任務列 disabled（同時只能有一個任務計時）、輸入框帶入當前任務名、按鈕轉為紅色「停止」。
 struct PopoverView: View {
     @Bindable var controller: TimerController
-    @Environment(\.openWindow) private var openWindow
 
     @State private var draft: String = ""
     @FocusState private var inputFocused: Bool
 
+    private var trimmedDraft: String {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            statusLine
+            inputRow
 
             Divider()
 
-            // 任務輸入 + 開始/停止
-            HStack(spacing: 8) {
-                TextField("任務名稱…", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($inputFocused)
-                    .onSubmit { startFromDraft() }
-                Button(controller.isRunning ? "停止" : "開始") {
-                    if controller.isRunning {
-                        Task { await controller.stop(reason: .manual) }
-                    } else {
-                        startFromDraft()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-
-            // 進行中清單快選
-            if !controller.activeTasks.isEmpty {
-                Text("進行中")
-                    .font(.caption).foregroundStyle(.secondary)
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(controller.activeTasks) { task in
-                            quickRow(task)
-                        }
-                    }
-                }
-                .frame(maxHeight: 180)
-            }
+            recentList
 
             Divider()
 
+            footer
+        }
+        .padding(14)
+        .frame(width: 300)
+        .task {
+            await controller.reloadRecentTasks()
+            syncDraftWithRunning()
+        }
+        .onChange(of: controller.isRunning) { _, _ in syncDraftWithRunning() }
+        .onReceive(NotificationCenter.default.publisher(for: .focusTaskInputRequested)) { _ in
+            inputFocused = true
+        }
+    }
+
+    // MARK: - 輸入框 + 開始/停止
+
+    private var inputRow: some View {
+        HStack(spacing: 8) {
+            TextField("任務名稱…", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .focused($inputFocused)
+                .disabled(controller.isRunning)          // 計時中不可換任務，先停止
+                .onSubmit { if !controller.isRunning { startFromDraft() } }
+
+            Button(action: toggleMain) {
+                Text(controller.isRunning ? "停止" : "開始")
+                    .frame(minWidth: 40)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(controller.isRunning ? .red : .green)
+            .disabled(!controller.isRunning && trimmedDraft.isEmpty)
+        }
+    }
+
+    // MARK: - 最近清單
+
+    private var recentList: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("最近").font(.caption).foregroundStyle(.secondary)
+            if controller.recentTasks.isEmpty {
+                Text("尚無計時紀錄").font(.caption).foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(controller.recentTasks) { task in
+                    recentRow(task)
+                }
+            }
+        }
+    }
+
+    private func recentRow(_ task: TaskItem) -> some View {
+        let isCurrent = controller.currentTaskID == task.id && controller.isRunning
+        return Button {
+            draft = task.name                            // 帶入輸入框
+            Task { await controller.start(taskName: task.name) }
+        } label: {
+            HStack {
+                Image(systemName: isCurrent ? "stopwatch.fill" : "play.circle")
+                    .foregroundStyle(isCurrent ? Color.red : Color.accentColor)
+                Text(task.name).lineLimit(1)
+                Spacer()
+                if isCurrent {
+                    Text(controller.elapsedClock)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(controller.isRunning)                  // 計時中：全部 disabled
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .background(
+            isCurrent ? Color.accentColor.opacity(0.15) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+    }
+
+    // MARK: - 底部
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Button {
-                openWindow(id: "main")
+                AppContainer.shared?.menuBar?.closePopover()
+                AppContainer.shared?.openMainWindow?()
                 NSApp.activate(ignoringOtherApps: true)
             } label: {
                 Label("紀錄 / 總覽 / 設定", systemImage: "list.bullet.rectangle")
@@ -59,61 +121,28 @@ struct PopoverView: View {
                 .foregroundStyle(.secondary)
                 .font(.caption)
         }
-        .padding(14)
-        .frame(width: 300)
-        .task { await controller.reloadActiveTasks() }
-        .onReceive(NotificationCenter.default.publisher(for: .focusTaskInputRequested)) { _ in
-            inputFocused = true
-        }
     }
 
-    // MARK: - 子視圖
+    // MARK: - 動作
 
-    @ViewBuilder
-    private var statusLine: some View {
+    private func toggleMain() {
         if controller.isRunning {
-            HStack {
-                Image(systemName: "stopwatch.fill").foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(controller.currentTaskName).font(.headline).lineLimit(1)
-                    Text(controller.elapsedClock).font(.system(.title3, design: .monospaced))
-                }
-                Spacer()
-            }
+            Task { await controller.stop(reason: .manual) }
         } else {
-            HStack {
-                Image(systemName: "stopwatch").foregroundStyle(.secondary)
-                Text("未在計時").foregroundStyle(.secondary)
-                Spacer()
-            }
+            startFromDraft()
         }
-    }
-
-    private func quickRow(_ task: TaskItem) -> some View {
-        Button {
-            Task { await controller.start(taskID: task.id) }
-        } label: {
-            HStack {
-                Image(systemName: controller.currentTaskID == task.id ? "play.circle.fill" : "play.circle")
-                Text(task.name).lineLimit(1)
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
-        .background(
-            controller.currentTaskID == task.id
-                ? Color.accentColor.opacity(0.15) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6)
-        )
     }
 
     private func startFromDraft() {
-        let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmedDraft
         guard !name.isEmpty else { return }
         Task { await controller.start(taskName: name) }
-        draft = ""
+    }
+
+    /// 計時中→輸入框顯示當前任務名；閒置時不動（保留使用者輸入）。
+    private func syncDraftWithRunning() {
+        if controller.isRunning {
+            draft = controller.currentTaskName
+        }
     }
 }

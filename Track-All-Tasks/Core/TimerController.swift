@@ -24,8 +24,10 @@ final class TimerController {
     private(set) var currentTaskID: UUID?
     private(set) var currentTaskName: String = ""
     private(set) var elapsedSeconds: TimeInterval = 0
-    /// 進行中清單（popover 快選與主視窗共用）。
+    /// 進行中清單（主視窗共用）。
     private(set) var activeTasks: [TaskItem] = []
+    /// 最近執行過的任務（popover 快選用，最多 5 筆）。
+    private(set) var recentTasks: [TaskItem] = []
 
     /// 計時中的時鐘字串（`MM:SS` / `H:MM:SS`）。
     var elapsedClock: String { Formatting.clock(elapsedSeconds) }
@@ -63,6 +65,7 @@ final class TimerController {
             logError("finalizeOrphans 失敗", error)
         }
         await reloadActiveTasks()
+        await reloadRecentTasks()
         installSleepWakeObservers()
         idleMonitor.start()
     }
@@ -122,6 +125,7 @@ final class TimerController {
         }
         resetTimingState()
         await reloadActiveTasks()
+        await reloadRecentTasks()
 
         if reason == .idle {
             NotificationManager.notifyIdleStopped(
@@ -141,6 +145,15 @@ final class TimerController {
         }
     }
 
+    /// 重新載入 popover 的「最近」清單（最多 5 筆）。
+    func reloadRecentTasks() async {
+        do {
+            recentTasks = try await taskStore.recentlyTrackedTasks(limit: 5)
+        } catch {
+            logError("reloadRecentTasks 失敗", error)
+        }
+    }
+
     // MARK: - 私有：計時生命週期
 
     private func beginTiming(task: TaskItem) async {
@@ -157,6 +170,7 @@ final class TimerController {
             isRunning = true
             startTimers()
             await reloadActiveTasks()
+            await reloadRecentTasks()
         } catch {
             logError("beginTiming 失敗", error)
         }

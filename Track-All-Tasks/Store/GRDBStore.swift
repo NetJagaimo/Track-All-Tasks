@@ -25,6 +25,21 @@ final class GRDBStore: TaskStore, RecordStore, @unchecked Sendable {
         }
     }
 
+    func recentlyTrackedTasks(limit: Int) async throws -> [TaskItem] {
+        try await dbQueue.read { db in
+            // 以「最後一次計時的開始時間」排序，每個任務取一列；排除回收桶。
+            try TaskRow.fetchAll(db, sql: """
+                SELECT task.* FROM task
+                JOIN record ON record.task_id = task.id
+                WHERE task.state <> 'trashed'
+                GROUP BY task.id
+                ORDER BY MAX(record.start_at) DESC
+                LIMIT ?
+                """, arguments: [limit])
+                .map { $0.toDomain() }
+        }
+    }
+
     func tasks(state: TaskState) async throws -> [TaskItem] {
         // 各狀態依其時間戳遞減；active 依手動排序。
         let orderBy: String

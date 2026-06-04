@@ -2,17 +2,20 @@ import SwiftUI
 import AppKit
 import KeyboardShortcuts
 
-extension Notification.Name {
-    /// AppDelegate 找不到主視窗時發出，由常駐的 popover 接住、用 openWindow 重建。
-    static let openMainWindowRequested = Notification.Name("TAT.openMainWindowRequested")
-}
-
-/// 持有 App 的核心物件（資料層、設定、計時引擎），並裝上全域快捷鍵。
+/// 持有 App 的核心物件（資料層、設定、計時引擎、選單列），並裝上全域快捷鍵。
 @MainActor
 @Observable
 final class AppContainer {
+    /// 供 AppKit 端（AppDelegate / popover）取用的單例參照。
+    static private(set) var shared: AppContainer?
+
     let settings: SettingsStore
     let controller: TimerController
+    /// 方案 B：自管的選單列項目。延後到 run loop 啟動後才建立
+    /// （太早建 NSStatusItem 會在 window server 尚未連上時 assert 崩潰）。
+    private(set) var menuBar: MenuBarController?
+    /// 由主視窗在出現時填入，讓 AppKit 端能重新打開 SwiftUI 的主視窗。
+    var openMainWindow: (() -> Void)?
 
     init() {
         let settings = SettingsStore()
@@ -26,7 +29,13 @@ final class AppContainer {
         let controller = TimerController(tasks: store, records: store, settings: settings)
         self.settings = settings
         self.controller = controller
+        AppContainer.shared = self
         registerHotkeys()
+        // 等 App 啟動完成（window server 已連上）再建立選單列項目。
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.menuBar == nil else { return }
+            self.menuBar = MenuBarController(controller: self.controller)
+        }
     }
 
     private func registerHotkeys() {
@@ -34,10 +43,9 @@ final class AppContainer {
         KeyboardShortcuts.onKeyUp(for: .toggleTimer) { [weak controller] in
             Task { await controller?.toggle() }
         }
-        // 任務輸入：請求聚焦輸入欄（popover 開著時生效；否則由主視窗快速新增接手）。
-        KeyboardShortcuts.onKeyUp(for: .focusTaskInput) {
-            NotificationCenter.default.post(name: .focusTaskInputRequested, object: nil)
-            NotificationCenter.default.post(name: .openMainWindowRequested, object: nil)
+        // 任務輸入：打開選單列 popover 並把游標停在輸入欄。
+        KeyboardShortcuts.onKeyUp(for: .focusTaskInput) { [weak self] in
+            self?.menuBar?.focusInput()
         }
     }
 }
@@ -48,15 +56,7 @@ struct TrackAllTasksApp: App {
     @State private var container = AppContainer()
 
     var body: some Scene {
-        // 選單列圖示 + popover 面板（SPEC §4）。
-        MenuBarExtra {
-            PopoverView(controller: container.controller)
-        } label: {
-            MenuBarLabel(controller: container.controller)
-        }
-        .menuBarExtraStyle(.window)
-
-        // 主視窗（關閉後 App 仍留在選單列）。
+        // 主視窗（關閉後 App 仍留在選單列）。選單列本身由 MenuBarController（AppKit）管理。
         Window("任務工時", id: "main") {
             MainWindowView(container: container)
                 .task { await container.controller.bootstrap() }
@@ -103,7 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         if !found {
-            NotificationCenter.default.post(name: .openMainWindowRequested, object: nil)
+            // 主視窗已被銷毀 → 用 SwiftUI openWindow 重建（本函式只在主執行緒呼叫）。
+            MainActor.assumeIsolated {
+                AppContainer.shared?.openMainWindow?()
+            }
         }
     }
 

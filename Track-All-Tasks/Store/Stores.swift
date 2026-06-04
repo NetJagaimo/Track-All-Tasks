@@ -12,6 +12,8 @@ struct RecordWithTask: Identifiable, Hashable, Sendable {
 protocol TaskStore: Sendable {
     /// 進行中清單（state=active，依 sortOrder）。
     func activeTasks() async throws -> [TaskItem]
+    /// 最近執行過的任務（依最後一次計時的開始時間遞減，排除回收桶），最多 limit 筆。popover 快選用。
+    func recentlyTrackedTasks(limit: Int) async throws -> [TaskItem]
     /// 某狀態的任務清單，依該狀態的時間戳遞減（completed/archived/trashed）。
     func tasks(state: TaskState) async throws -> [TaskItem]
     func task(id: UUID) async throws -> TaskItem?
