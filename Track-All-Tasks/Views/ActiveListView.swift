@@ -22,9 +22,7 @@ struct ActiveListView: View {
         .navigationTitle("進行中")
         .task { await reloadAll() }
         .onChange(of: controller.activeTasks) { _, new in order = new }
-        .onReceive(NotificationCenter.default.publisher(for: .focusTaskInputRequested)) { _ in
-            inputFocused = true
-        }
+        // 註：「任務輸入」快捷鍵現在只給選單列面板用，主視窗不再接這個通知。
         .sheet(item: $editingTask) { t in
             TaskEditorSheet(controller: controller, task: t) { Task { await reloadAll() } }
         }
