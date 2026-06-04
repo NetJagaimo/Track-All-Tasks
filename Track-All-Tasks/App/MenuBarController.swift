@@ -89,8 +89,9 @@ final class MenuBarController: NSObject {
     /// 快捷鍵「任務輸入」用：打開 popover 並把游標停在輸入欄。
     func focusInput() {
         showPopover()
-        // 等 popover 內容掛載後再聚焦（performClose→show 後 SwiftUI 視圖要一個 runloop 才就緒）。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+        // 等 popover 內容掛載、視窗成為 key 後再聚焦輸入欄。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            self?.popover.contentViewController?.view.window?.makeKey()
             NotificationCenter.default.post(name: .focusTaskInputRequested, object: nil)
         }
     }

@@ -78,10 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nc.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { _ in
             DispatchQueue.main.async { Self.syncActivationPolicy() }
         }
-        nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            Self.bringMainWindowsForward()
-        }
         Self.syncActivationPolicy()
+    }
+
+    /// 關掉主視窗（Cmd+W）只是收起視窗，App 續留選單列；要結束請按 Cmd+Q。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     /// 正常關閉：把計時紀錄收尾在「當下」（SPEC §2）。
