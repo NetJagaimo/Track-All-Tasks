@@ -25,6 +25,8 @@ enum NotificationManager {
         content.title = "因閒置已停止計時"
         content.body = "「\(taskName)」已計時 \(duration)"
         content.sound = .default
+        // 是否「停留在畫面上不自動消失」取決於系統設定裡本 App 的「提醒樣式」要選「提醒」而非「橫幅」，
+        // App 無法用程式強制覆寫這個選項。（time-sensitive 等級需開發者憑證 entitlement，本機 ad-hoc 簽章不便加。）
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,

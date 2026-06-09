@@ -43,6 +43,10 @@ final class AppContainer {
         KeyboardShortcuts.onKeyUp(for: .toggleTimer) { [weak controller] in
             Task { await controller?.toggle() }
         }
+        // 停止計時（計時中才有作用）。
+        KeyboardShortcuts.onKeyUp(for: .stopTimer) { [weak controller] in
+            Task { await controller?.stop(reason: .manual) }
+        }
         // 任務輸入：打開選單列 popover 並把游標停在輸入欄。
         KeyboardShortcuts.onKeyUp(for: .focusTaskInput) { [weak self] in
             self?.menuBar?.focusInput()

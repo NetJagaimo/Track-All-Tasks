@@ -23,6 +23,7 @@ struct SettingsView: View {
 
             Section("全域快捷鍵") {
                 KeyboardShortcuts.Recorder("開始 / 停止：", name: .toggleTimer)
+                KeyboardShortcuts.Recorder("停止：", name: .stopTimer)
                 KeyboardShortcuts.Recorder("任務輸入：", name: .focusTaskInput)
             }
 

@@ -27,11 +27,11 @@ final class GRDBStore: TaskStore, RecordStore, @unchecked Sendable {
 
     func recentlyTrackedTasks(limit: Int) async throws -> [TaskItem] {
         try await dbQueue.read { db in
-            // 以「最後一次計時的開始時間」排序，每個任務取一列；排除回收桶。
+            // 以「最後一次計時的開始時間」排序，每個任務取一列；排除回收桶與已完成。
             try TaskRow.fetchAll(db, sql: """
                 SELECT task.* FROM task
                 JOIN record ON record.task_id = task.id
-                WHERE task.state <> 'trashed'
+                WHERE task.state NOT IN ('trashed', 'completed')
                 GROUP BY task.id
                 ORDER BY MAX(record.start_at) DESC
                 LIMIT ?

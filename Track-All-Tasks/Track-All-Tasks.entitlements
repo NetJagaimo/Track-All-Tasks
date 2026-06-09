@@ -4,5 +4,7 @@
 <dict>
     <!-- 個人工具：不開 App Sandbox（全域快捷鍵走 Carbon、資料寫 Application Support）。 -->
     <!-- 硬化執行階段（Hardened Runtime）由 build setting 開啟，這裡保持空白即可。 -->
+    <!-- 註：time-sensitive 通知的 entitlement 需要正式開發者憑證簽章，
+         本機 ad-hoc 簽章加上去會讓建置失敗，故不加；通知仍會以一般等級送出。 -->
 </dict>
 </plist>
