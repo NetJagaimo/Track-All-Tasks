@@ -65,6 +65,22 @@ enum OverviewCalculator {
         return DayOverview(date: dayStart, tasks: tasks, total: total)
     }
 
+    /// 全部時間：各任務累計（遞減）與總計。每筆紀錄計全長（計時中以 now 為結束）。
+    static func allTime(
+        records: [RecordWithTask],
+        now: Date = Date()
+    ) -> (tasks: [TaskDuration], total: TimeInterval) {
+        var byTask: [String: TimeInterval] = [:]
+        for item in records {
+            byTask[item.taskName, default: 0] += item.record.duration(now: now)
+        }
+        let tasks = byTask
+            .map { TaskDuration(name: $0.key, seconds: $0.value) }
+            .sorted { $0.seconds > $1.seconds }
+        let total = tasks.reduce(0) { $0 + $1.seconds }
+        return (tasks, total)
+    }
+
     /// 包含某日期那一週（週一～週日）的總覽。
     static func week(
         containing date: Date,

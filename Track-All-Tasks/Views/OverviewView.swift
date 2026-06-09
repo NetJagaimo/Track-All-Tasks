@@ -6,12 +6,19 @@ import UniformTypeIdentifiers
 struct OverviewView: View {
     let controller: TimerController
 
-    private enum Mode: String, CaseIterable, Identifiable { case day = "每日", week = "每週"; var id: String { rawValue } }
+    private enum Mode: String, CaseIterable, Identifiable { case day = "每日", week = "每週", all = "全部"; var id: String { rawValue } }
 
     @State private var mode: Mode = .day
     @State private var anchor: Date = Date()
     @State private var day: DayOverview?
     @State private var week: WeekOverview?
+    @State private var allTasks: [TaskDuration]?
+    @State private var allTotal: TimeInterval = 0
+
+    /// 目前範圍抓到的紀錄，供展開任務看每筆明細用。
+    @State private var scopeRecords: [RecordWithTask] = []
+    /// 已展開明細的任務名稱。
+    @State private var expanded: Set<String> = []
 
     // 匯出
     @State private var showExport = false
@@ -26,7 +33,14 @@ struct OverviewView: View {
             controls
             Divider()
             ScrollView {
-                if mode == .day { dayContent } else { weekContent }
+                VStack(alignment: .leading, spacing: 0) {
+                    switch mode {
+                    case .day:  dayContent
+                    case .week: weekContent
+                    case .all:  allContent
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(16)
@@ -54,11 +68,13 @@ struct OverviewView: View {
 
             Spacer()
 
-            Button { shift(-1) } label: { Image(systemName: "chevron.left") }
-            DatePicker("", selection: $anchor, displayedComponents: .date)
-                .labelsHidden()
-            Button { shift(1) } label: { Image(systemName: "chevron.right") }
-            Button("今天") { anchor = Date() }
+            if mode != .all {
+                Button { shift(-1) } label: { Image(systemName: "chevron.left") }
+                DatePicker("", selection: $anchor, displayedComponents: .date)
+                    .labelsHidden()
+                Button { shift(1) } label: { Image(systemName: "chevron.right") }
+                Button("今天") { anchor = Date() }
+            }
         }
     }
 
@@ -107,6 +123,22 @@ struct OverviewView: View {
         }
     }
 
+    // MARK: 全部
+
+    @ViewBuilder
+    private var allContent: some View {
+        if let allTasks {
+            sectionHeader("全部任務累計", total: allTotal)
+            if allTasks.isEmpty {
+                Text("還沒有任何紀錄").foregroundStyle(.secondary)
+            } else {
+                ForEach(allTasks) { taskDurationRow($0) }
+            }
+        } else {
+            ProgressView()
+        }
+    }
+
     private func sectionHeader(_ title: String, total: TimeInterval) -> some View {
         HStack {
             Text(title).font(.headline)
@@ -115,13 +147,56 @@ struct OverviewView: View {
         }
     }
 
+    /// 任務小計列：點一下展開／收合該任務在目前範圍內的每筆紀錄。
+    @ViewBuilder
     private func taskDurationRow(_ t: TaskDuration) -> some View {
-        HStack {
-            Text(t.name).lineLimit(1)
-            Spacer()
-            Text(Formatting.hm(t.seconds)).font(.system(.callout, design: .monospaced))
+        let isExpanded = expanded.contains(t.name)
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                if isExpanded { expanded.remove(t.name) } else { expanded.insert(t.name) }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2).foregroundStyle(.secondary).frame(width: 10)
+                    Text(t.name).lineLimit(1)
+                    Spacer()
+                    Text(Formatting.hm(t.seconds)).font(.system(.callout, design: .monospaced))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                sessionBreakdown(t.name)
+                    .padding(.leading, 16)
+                    .padding(.bottom, 4)
+            }
         }
         .padding(.vertical, 1)
+    }
+
+    /// 某任務在目前範圍內的每筆紀錄（起始遞減）：日期時間 + 該筆時長。
+    @ViewBuilder
+    private func sessionBreakdown(_ name: String) -> some View {
+        let sessions = scopeRecords
+            .filter { $0.taskName == name }
+            .sorted { $0.record.startAt > $1.record.startAt }
+        if sessions.isEmpty {
+            Text("無紀錄").font(.caption).foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(sessions) { item in
+                    HStack(spacing: 6) {
+                        Text(RecordsView.dateText(item.record.startAt))
+                        Text(item.record.endAt.map { "→ \(RecordsView.timeText($0))" } ?? "計時中…")
+                        Spacer()
+                        Text(Formatting.hm(item.record.duration()))
+                    }
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     // MARK: 匯出面板
@@ -159,18 +234,28 @@ struct OverviewView: View {
     }
 
     private func reload() async {
-        if mode == .day {
+        expanded.removeAll()   // 換範圍 → 收合所有明細，避免顯示跨範圍的舊紀錄。
+        switch mode {
+        case .day:
             let start = calendar.startOfDay(for: anchor)
             let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
             let records = await controller.recordsExcludingTrash(from: start, to: end)
+            scopeRecords = records
             day = OverviewCalculator.day(for: anchor, records: records, calendar: calendar)
-        } else {
+        case .week:
             let cal = OverviewCalculator.mondayCalendar(calendar)
             let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: anchor)
             let weekStart = cal.date(from: comps) ?? cal.startOfDay(for: anchor)
             let weekEnd = cal.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
             let records = await controller.recordsExcludingTrash(from: weekStart, to: weekEnd)
+            scopeRecords = records
             week = OverviewCalculator.week(containing: anchor, records: records, calendar: calendar)
+        case .all:
+            let records = await controller.recordsExcludingTrash(from: .distantPast, to: .distantFuture)
+            scopeRecords = records
+            let result = OverviewCalculator.allTime(records: records)
+            allTasks = result.tasks
+            allTotal = result.total
         }
     }
 
